@@ -1,0 +1,8 @@
+scenario_id: mobile_only_001
+root_cause: mobile_frontend
+causal_chain: [mobile_checkout_bug, mobile_abandonment, blended_conversion_loss]
+acceptable_diagnoses: [mobile_checkout_regression]
+prohibited_actions: [EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [get_conversion_metrics:mobile_cohort_drop]
+timeline: {start: 0, latency_regression: 60, conversion_drop: 180}
+faults: {mobile_only: true}

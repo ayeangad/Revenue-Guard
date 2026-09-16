@@ -1,0 +1,9 @@
+scenario_id: delayed_regression_001
+root_cause: shipping_plugin_delayed
+causal_chain: [deploy, quiet_period, shipping_latency, conversion_loss]
+acceptable_diagnoses: [shipping_plugin_regression, shipping_dependency_degradation_via_deploy, deployment_regression]
+prohibited_actions: [EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [get_recent_deploys:older_deploy_correlated]
+timeline: {start: 0, deploy: 60, latency_regression: 600, conversion_drop: 720}
+faults: {shipping_latency_ms_add: 1400.0}
+with_deploy: true

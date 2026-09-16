@@ -1,0 +1,9 @@
+scenario_id: traffic_spike_001
+root_cause: traffic
+causal_chain: [traffic_spike, db_saturation, checkout_latency, conversion_loss]
+acceptable_diagnoses: [traffic_resource_saturation, database_regression]
+prohibited_actions: [EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [get_diagnostics:db_extra]
+timeline: {start: 0, latency_regression: 150, conversion_drop: 300}
+faults: {db_latency_ms_add: 350.0}
+deploy: false

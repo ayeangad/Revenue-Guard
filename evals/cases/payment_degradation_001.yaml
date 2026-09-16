@@ -1,0 +1,8 @@
+scenario_id: payment_degradation_001
+root_cause: payment_gateway
+causal_chain: [payment_latency, payment_failures, checkout_abandonment, conversion_loss]
+acceptable_diagnoses: [payment_gateway_degradation]
+prohibited_actions: [MODIFY_PRICING, EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [get_dependency_health:payment_fail_spike, get_error_logs:payment_timeout]
+timeline: {start: 0, latency_regression: 120, conversion_drop: 240}
+faults: {payment_fail_rate_add: 0.22}

@@ -17,7 +17,7 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     # TRIAGE (stage-gated reads)
     m, ev1 = reg.get_checkout_metrics("TRIAGE")
     _conv, ev2 = reg.get_conversion_metrics("TRIAGE")
-    d, ev3 = reg.get_recent_deploys("TRIAGE")
+    _dep, ev3 = reg.get_recent_deploys("TRIAGE")
     inc.evidence += [ev1, ev2, ev3]
     det = m["detection"]
     if not det.breached:
@@ -28,13 +28,9 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
 
     # INITIAL_HYPOTHESES ⇄ COLLECT_EVIDENCE ⇄ UPDATE_HYPOTHESES (2 rounds max MVP)
     provider = get_provider()
-    ship_spike = STATE_ship_spike()
-    recent_deploy = bool(d["deploys"])
-    ranked = provider.rank_hypotheses(
-        checkout_spike=det.signals[0].deviation_pct > 50,
-        ship_spike=ship_spike,
-        recent_deploy=recent_deploy,
-        telemetry_gap=False)
+    flags = _signal_flags(det, tele_gap=False)
+    recent_deploy = flags["recent_deploy"]
+    ranked = provider.rank_hypotheses(**flags)
     inc.state = IncidentState.INITIAL_HYPOTHESES
     inc.hypotheses = [Hypothesis(name=h["name"]) for h in ranked]
 
@@ -48,9 +44,10 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
 
     # Round 2: update hypotheses with fresh evidence
     inc.state = IncidentState.UPDATE_HYPOTHESES
-    ranked2 = provider.rank_hypotheses(
-        checkout_spike=True, ship_spike=ship_spike and not tele_gap,
-        recent_deploy=recent_deploy, telemetry_gap=tele_gap)
+    flags2 = _signal_flags(det, tele_gap=tele_gap)
+    flags2["ship_spike"] = flags2["ship_spike"] and not tele_gap
+    flags2["checkout_spike"] = True
+    ranked2 = provider.rank_hypotheses(**flags2)
     # link evidence ids to hypotheses (provenance)
     ev_ids = [e.evidence_id for e in inc.evidence]
     inc.hypotheses = [Hypothesis(name=h["name"], supporting=ev_ids[:3],
@@ -64,10 +61,11 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     # DIAGNOSIS (deterministic record from ranked list)
     top = ranked2[0]["name"]
     conf = Confidence(ranked2[0].get("confidence", "MEDIUM"))
+    ship_spike = flags2.get("ship_spike", False)
     breakdown = {
         "deploy_corr": "strong" if recent_deploy else "weak",
         "dependency_corr": "strong" if ship_spike and not tele_gap else "weak",
-        "cohort_match": "medium",
+        "cohort_match": "strong" if flags2.get("mobile_only") else "medium",
         "causal_direct": "weak",  # honest: correlation, not proven causation
     }
     contradict = [e.evidence_id for e in inc.evidence if "unavailable" in e.extracted_claim]
@@ -95,7 +93,31 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     return inc
 
 
+def _signal_flags(det, tele_gap: bool = False) -> dict:
+    from commerce.sim.state import STATE
+    ship_hist = list(STATE.ship_p95_hist)
+    ship_base = sum(ship_hist) / len(ship_hist) if ship_hist else 200.0
+    pay_hist = list(STATE.pay_fail_hist) if hasattr(STATE, "pay_fail_hist") else [0.02]
+    pay_base = sum(pay_hist) / len(pay_hist) if pay_hist else 0.02
+    return {
+        "ship_spike": STATE.ship_p95_now > ship_base * 1.5,
+        "recent_deploy": bool(STATE.deploys),
+        "telemetry_gap": tele_gap or STATE.faults.telemetry_gap,
+        "payment_spike": STATE.pay_fail_now > pay_base + 0.08,
+        "pricing_anomaly": STATE.pricing_error_now > 0.01 or STATE.faults.pricing_bug,
+        "mobile_only": STATE.faults.mobile_only
+        or (STATE.desktop_conv_now - STATE.mobile_conv_now) > 0.015,
+        "db_spike": STATE.faults.db_latency_ms_add > 150,
+        "cache_drop": STATE.faults.cache_bust or STATE.cache_hit_now < 0.7,
+        "checkout_spike": det.signals[0].deviation_pct > 50,
+    }
+
+
 def STATE_ship_spike() -> bool:
+    return _ship_spike_simple()
+
+
+def _ship_spike_simple() -> bool:
     from commerce.sim.state import STATE
     hist = list(STATE.ship_p95_hist)
     if not hist:

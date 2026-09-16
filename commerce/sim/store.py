@@ -17,6 +17,8 @@ class FaultIn(BaseModel):
     payment_fail_rate_add: float = 0.0
     pricing_bug: bool = False
     telemetry_gap: bool = False
+    cache_bust: bool = False
+    mobile_only: bool = False
 
 
 class DeployIn(BaseModel):
@@ -41,22 +43,40 @@ def checkout():
     started = time.perf_counter()
     # Deterministic latency model: baseline + injected faults
     ship = 200.0 + STATE.faults.shipping_latency_ms_add
-    db = 60.0 + STATE.faults.db_latency_ms_add
+    db = 60.0 + STATE.faults.db_latency_ms_add + (300.0 if STATE.faults.cache_bust else 0.0)
     checkout_ms = 250.0 + ship * 0.6 + db * 1.5
     STATE.checkout_latency_ms = checkout_ms
     STATE.ship_p95_now = ship
+    STATE.pay_fail_now = min(0.95, 0.02 + STATE.faults.payment_fail_rate_add)
+    STATE.cache_hit_now = 0.40 if STATE.faults.cache_bust else 0.95
+    STATE.pricing_error_now = 0.25 if STATE.faults.pricing_bug else 0.0
     # Conversion degrades with latency (simple, explainable model)
     excess = max(0.0, checkout_ms - 500.0)
-    STATE.conv_now = max(0.005, 0.038 - excess * 0.000008 - STATE.faults.payment_fail_rate_add)
+    base_conv = max(0.005, 0.038 - excess * 0.000008 - STATE.faults.payment_fail_rate_add
+                    - STATE.pricing_error_now * 0.05)
+    if STATE.faults.mobile_only:
+        STATE.mobile_conv_now = max(0.003, base_conv - 0.022)
+        STATE.desktop_conv_now = 0.039
+        STATE.conv_now = (STATE.mobile_conv_now + STATE.desktop_conv_now) / 2
+    else:
+        STATE.mobile_conv_now = base_conv - 0.002
+        STATE.desktop_conv_now = base_conv + 0.001
+        STATE.conv_now = base_conv
     STATE.checkout_p95_now = checkout_ms
     elapsed_ms = (time.perf_counter() - started) * 1000
     ok = STATE.faults.payment_fail_rate_add < 0.5
+    err = None
+    if not ok:
+        err = "timeout"
+    elif STATE.faults.pricing_bug:
+        err = "pricing_mismatch"
     return {
         "journey": "checkout",
         "status": "ok" if ok else "failed",
         "duration_ms": round(checkout_ms, 1),
         "compute_ms": round(elapsed_ms, 2),
-        "step": "payment" if not ok else "order_creation",
+        "step": "payment" if not ok else ("pricing" if err else "order_creation"),
+        "error": err,
         "environment": "staging",
     }
 
@@ -77,6 +97,9 @@ def m_conv():
         "history": list(STATE.conv_hist),
         "sessions": STATE.sessions_window,
         "aov": STATE.aov,
+        "cohorts": {"mobile": STATE.mobile_conv_now, "desktop": STATE.desktop_conv_now},
+        "payment_fail_rate": STATE.pay_fail_now,
+        "pricing_error_rate": STATE.pricing_error_now,
     }
 
 
@@ -84,7 +107,10 @@ def m_conv():
 def m_dep():
     if STATE.faults.telemetry_gap:
         return {"unavailable": True}
-    return {"shipping_p95_ms": STATE.ship_p95_now, "history": list(STATE.ship_p95_hist)}
+    return {"shipping_p95_ms": STATE.ship_p95_now, "history": list(STATE.ship_p95_hist),
+            "payment_fail_rate": STATE.pay_fail_now,
+            "db_extra_ms": STATE.faults.db_latency_ms_add,
+            "cache_hit_rate": STATE.cache_hit_now}
 
 
 @app.get("/deploys")
@@ -103,12 +129,15 @@ def set_fault(f: FaultIn):
     STATE.faults.payment_fail_rate_add = f.payment_fail_rate_add
     STATE.faults.pricing_bug = f.pricing_bug
     STATE.faults.telemetry_gap = f.telemetry_gap
+    STATE.faults.cache_bust = f.cache_bust
+    STATE.faults.mobile_only = f.mobile_only
     # Immediately reflect in "now" signals (deterministic, no sleep)
     checkout()
     STATE.clock.advance(30)
     STATE.checkout_p95_hist.append(STATE.checkout_p95_now)
     STATE.conv_hist.append(STATE.conv_now)
     STATE.ship_p95_hist.append(STATE.ship_p95_now)
+    STATE.pay_fail_hist.append(STATE.pay_fail_now)
     return {"ok": True, "checkout_p95_ms": STATE.checkout_p95_now}
 
 

@@ -15,6 +15,8 @@ class Faults:
     payment_fail_rate_add: float = 0.0
     pricing_bug: bool = False
     telemetry_gap: bool = False  # when True, dependency metrics unavailable
+    cache_bust: bool = False
+    mobile_only: bool = False
 
 
 @dataclass
@@ -34,9 +36,15 @@ class SimState:
     checkout_p95_hist: deque = field(default_factory=lambda: deque(maxlen=60))
     conv_hist: deque = field(default_factory=lambda: deque(maxlen=60))
     ship_p95_hist: deque = field(default_factory=lambda: deque(maxlen=60))
+    pay_fail_hist: deque = field(default_factory=lambda: deque(maxlen=60))
     checkout_p95_now: float = 450.0
     conv_now: float = 0.038
     ship_p95_now: float = 200.0
+    pay_fail_now: float = 0.02
+    cache_hit_now: float = 0.95
+    mobile_conv_now: float = 0.036
+    desktop_conv_now: float = 0.039
+    pricing_error_now: float = 0.0
     sessions_window: int = 12000
     aov: float = 84.0
     plugin_version: str = "2.4.0"

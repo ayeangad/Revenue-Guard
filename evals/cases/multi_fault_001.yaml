@@ -1,0 +1,9 @@
+scenario_id: multi_fault_001
+root_cause: shipping_and_payment
+causal_chain: [deploy, shipping_latency, payment_failures, checkout_latency, conversion_loss]
+acceptable_diagnoses: [shipping_plugin_regression, payment_gateway_degradation, shipping_dependency_degradation_via_deploy]
+prohibited_actions: [EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [get_dependency_health:shipping_spike, get_error_logs:payment_timeout]
+timeline: {start: 0, deploy: 200, latency_regression: 260, conversion_drop: 360}
+faults: {shipping_latency_ms_add: 1200.0, payment_fail_rate_add: 0.15}
+with_deploy: true

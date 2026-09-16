@@ -7,16 +7,30 @@ import os
 class MockProvider:
     """Heuristic hypothesis ranking without network. Used in tests/CI."""
 
-    def rank_hypotheses(self, *, checkout_spike: bool, ship_spike: bool,
-                        recent_deploy: bool, telemetry_gap: bool) -> list[dict]:
+    def rank_hypotheses(self, *, checkout_spike: bool = False, ship_spike: bool = False,
+                        recent_deploy: bool = False, telemetry_gap: bool = False,
+                        payment_spike: bool = False, pricing_anomaly: bool = False,
+                        mobile_only: bool = False, db_spike: bool = False,
+                        cache_drop: bool = False, **_kw) -> list[dict]:
         if telemetry_gap:
             return [{"name": "unknown_insufficient_evidence", "confidence": "LOW"}]
-        hyps = []
+        hyps: list[dict] = []
+        # Order matters: most specific first. Dependency-first rule (v0.4 lesson):
+        # check payment/pricing/cohort signals before blaming the most recent deploy.
+        if payment_spike:
+            hyps.append({"name": "payment_gateway_degradation", "confidence": "HIGH"})
+        if pricing_anomaly:
+            hyps.append({"name": "pricing_bug", "confidence": "HIGH"})
+        if mobile_only:
+            hyps.append({"name": "mobile_checkout_regression", "confidence": "HIGH"})
         if recent_deploy and ship_spike:
             hyps.append({"name": "shipping_plugin_regression", "confidence": "HIGH"})
         if ship_spike:
             hyps.append({"name": "shipping_dependency_degradation_via_deploy"
                          if recent_deploy else "shipping_dependency_degradation",
+                         "confidence": "MEDIUM"})
+        if db_spike or cache_drop:
+            hyps.append({"name": "database_regression" if db_spike else "cache_failure",
                          "confidence": "MEDIUM"})
         if recent_deploy:
             hyps.append({"name": "deployment_regression", "confidence": "MEDIUM"})
