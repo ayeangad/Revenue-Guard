@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from agent.providers.llm import get_provider
 from agent.tools.registry import ToolRegistry
+from domain.conflicts import detect_conflicts
+from domain.evidence import assess, downgrade
 from domain.models import Confidence, Diagnosis, Hypothesis, Incident, IncidentState
 from domain.state_machine import transition
 
@@ -52,6 +54,11 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
         return inc
     inc.evidence += [ev_dep, ev_log, ev_diag]
     tele_gap = bool(dep_payload.get("unavailable"))
+    # Freshness must affect behavior: stale key evidence caps confidence later.
+    fresh = assess(inc.evidence)
+    inc.signals["stale_evidence"] = fresh["stale_ids"]
+    stale_key = any(e.tool_name in ("get_checkout_metrics", "get_dependency_health")
+                    and e.evidence_id in fresh["stale_ids"] for e in inc.evidence)
 
     # Round 2: update hypotheses with fresh evidence
     transition(inc, IncidentState.UPDATE_HYPOTHESES)
@@ -72,6 +79,9 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     # DIAGNOSIS (deterministic record from ranked list)
     top = ranked2[0]["name"]
     conf = Confidence(ranked2[0].get("confidence", "MEDIUM"))
+    conflicts = detect_conflicts(inc.evidence)
+    if conflicts or stale_key:
+        conf = Confidence(downgrade(conf.value))  # contradiction/staleness -> humility
     ship_spike = flags2.get("ship_spike", False)
     breakdown = {
         "deploy_corr": "strong" if recent_deploy else "weak",
@@ -80,18 +90,28 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
         "causal_direct": "weak",  # honest: correlation, not proven causation
     }
     contradict = [e.evidence_id for e in inc.evidence if "unavailable" in e.extracted_claim]
+    missing = ["exact query plan"] if "deploy" in top else []
+    if conflicts:
+        missing.append(f"resolve conflicting evidence: {conflicts[0]}")
+    if stale_key:
+        missing.append("re-collect stale evidence within freshness window")
     inc.diagnosis = Diagnosis(
         selected_hypothesis=top, confidence=conf, breakdown=breakdown,
         supporting=ev_ids, contradicting=contradict,
-        missing=["exact query plan"] if "deploy" in top else [],
+        missing=missing,
         reasoning_summary=f"Top hypothesis {top} from competing set "
-                          f"{[h['name'] for h in ranked2]}; see linked evidence.")
+                          f"{[h['name'] for h in ranked2]}; see linked evidence."
+                          + (f" Conflicts: {conflicts}." if conflicts else ""))
     transition(inc, IncidentState.DIAGNOSIS)
 
-    # IMPACT (deterministic counterfactual)
-    impact_payload, ev_imp = reg.estimate_revenue_impact("IMPACT_ESTIMATION")
-    inc.evidence.append(ev_imp)
-    inc.signals["impact"] = impact_payload["impact"].model_dump()
+    # IMPACT (deterministic counterfactual; estimator outage -> unreliable, continue safe)
+    try:
+        impact_payload, ev_imp = reg.estimate_revenue_impact("IMPACT_ESTIMATION")
+        inc.evidence.append(ev_imp)
+        inc.signals["impact"] = impact_payload["impact"].model_dump()
+    except Exception as e:  # noqa: BLE001 - impact is advisory; diagnosis stands
+        inc.signals["impact"] = {"reliable": False,
+                                 "note": f"estimator unavailable: {type(e).__name__}"}
     transition(inc, IncidentState.IMPACT_ESTIMATION)
 
     # RECOMMENDATION + DRY_RUN (no writes yet)
