@@ -20,6 +20,19 @@ def evidence_judge(result: dict, spec: dict) -> bool:
         result.get("hypotheses_n", 0) >= 2 or result["diagnosis"] == "INSUFFICIENT_EVIDENCE")
 
 
+RUBRIC_V1 = "rubric_v1"
+RUBRIC_V2 = "rubric_v2"
+
+
+def rubric_judge_v2(result: dict, spec: dict) -> bool:
+    """Deliberate drift candidate: v1 + confidence required on non-IDK verdicts
+    (a confident-sounding label with confidence=None must not pass)."""
+    if not evidence_judge(result, spec):
+        return False
+    return not (result["diagnosis"] != "INSUFFICIENT_EVIDENCE"
+                and not result.get("confidence"))
+
+
 def freeform_judge(result: dict, spec: dict) -> bool:
     """Lenient: substring match on root cause tokens."""
     root = spec.get("root_cause", "")
@@ -63,10 +76,20 @@ if __name__ == "__main__":
     f = [x["freeform"] for x in rows]
     rb = [x["rubric"] for x in rows]
     ev = [x["evidence"] for x in rows]
+    v2 = []
+    for p in sorted(glob.glob("evals/cases/*.yaml")):
+        spec = yaml.safe_load(Path(p).read_text())
+        v2.append(rubric_judge_v2(res[spec["scenario_id"]], spec))
     out = {"rows": rows,
+           "rubric_v1": RUBRIC_V1, "rubric_v2": RUBRIC_V2,
            "agreement_freeform_vs_rubric": sum(x == y for x, y in zip(f, rb)) / len(rows),
            "kappa_freeform_vs_rubric": cohen_kappa(f, rb),
            "kappa_rubric_vs_evidence": cohen_kappa(rb, ev),
+           "rubric_drift_v1_vs_v2": {
+               "agreement": sum(x == y for x, y in zip(rb, v2)) / len(rows),
+               "kappa": cohen_kappa(rb, v2),
+               "changed": [r["scenario"] for r, a, b in
+                           zip(rows, rb, v2) if a != b]},
            "confusion_rubric": confusion(rb)}
     # human vs judge: demonstrates the judge itself can be wrong (GRADER_FAILURE).
     # human_labels.json deliberately disagrees on 2/6 (transient over-confidence,

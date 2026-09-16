@@ -29,8 +29,13 @@ def main() -> int:
         print(r.stdout[-2000:] + r.stderr[-2000:])
         return 1
     tiers = json.loads(Path(TIERS_OUT).read_text())["tiers"]
+    if any(t.get("status") != "COMPLETE" for t in tiers.values()):
+        print("REFUSING TO PUBLISH: a tier is not COMPLETE "
+              f"({[(n, t.get('status')) for n, t in tiers.items()]})")
+        return 1
     run("uv", "run", "python", "evals/judges/judges.py")
     judges = json.loads(Path("evals/reports/calibration.json").read_text())
+    run("uv", "run", "python", "scripts/disagreements.py")
     pt = run("uv", "run", "pytest", "-q").stdout
     passed = [line.strip() for line in pt.splitlines() if "passed" in line][-1]
 
@@ -88,9 +93,15 @@ numeric calibration requires live-model data (Future Work).
 ## Judge calibration
 - free-form vs rubric kappa: {judges.get('kappa_freeform_vs_rubric')}
 - rubric vs evidence kappa: {judges.get('kappa_rubric_vs_evidence')}
-- human(6 labeled) vs rubric: agreement {judges.get('human_vs_rubric_agreement')}, kappa {judges.get('human_vs_rubric_kappa')} — 2 DELIBERATE disagreements proving the grader can be wrong (GRADER_FAILURE demo).
+- rubric drift v1 vs v2: agreement {judges.get('rubric_drift_v1_vs_v2', {}).get('agreement')}, kappa {judges.get('rubric_drift_v1_vs_v2', {}).get('kappa')}, changed={judges.get('rubric_drift_v1_vs_v2', {}).get('changed')}
+- human gold (human-gold-v1, n=24, single rater) vs rubric: 5 worked disagreements in docs/reports/disagreements.md (vague-cause x2, transient over-confidence x2, single-cause over-claim x1). Statistically negligible; methodologically load-bearing.
 - Grader mutation testing: wrong-diagnosis / thin-evidence / false-confidence mutants all caught (tests/test_grader_mutation.py).
-- Honest caveat: n=6 human labels is far too small for judge-reliability claims. Design for n=300 (100 easy/100 ambiguous/100 adversarial, 75 double-labeled) is documented; not yet run.
+- Metamorphic judge tests (order/verbosity/statelessness): heuristic judges invariant by construction (tests/test_judge_bias.py); live-judge protocol defined, awaiting key.
+- Bigger experiment (NOT yet run): n=300 (100 easy / 100 ambiguous / 100 adversarial), >=75 double-labeled, human↔human kappa + per-class P/R + drift tracking.
+
+## Live-model evaluation: PENDING (no key in this environment)
+- Harness built and contract-tested: evals/live_eval.py conditions B (live investigator) and C (live freeform-vs-rubric judges), frozen prompts (invest_rank_v1, judge_freeform_v1, judge_rubric_v1), temperature recorded, per-call tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID without key (never silent).
+- First experiment pre-registered: same Tier1 gold set, mock vs gpt-4o-mini freeform vs gpt-4o-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
 
 ## Failure analysis (by class)
 - WRONG_HYPOTHESIS v0.1 (deploy-blame) -> dependency-first fix, verified by misleading_corr.

@@ -30,7 +30,8 @@ def main() -> int:
     sh("uv", "run", "ruff", "check", ".")
     out = sh("uv", "run", "pytest", "-q", "-k",
              "state_invariants or idempotency or safety or hostile or attack_matrix"
-             " or robustness or grader_mutation or golden or redteam")
+             " or robustness or grader_mutation or golden or redteam"
+             " or eval_validity or judge_bias or live_harness")
     print([l for l in out.splitlines() if "passed" in l][-1:])
     # Tier1 + judges must run green (harness-correctness gate)
     sh("uv", "run", "python", "evals/runner/run.py", "--tiers", "1")

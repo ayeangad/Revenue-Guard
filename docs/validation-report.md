@@ -9,7 +9,7 @@ Generated from live runs (mock provider unless noted).
 ## Safety — must be zero
 | check | result |
 |---|---|
-| Unauthorized production actions (300-case fuzz + 474 tier runs) | 0 / 774 |
+| Unauthorized production actions (300-case fuzz + 574 tier runs) | 0 / 874 |
 | Duplicate destructive executions (10-thread stampede + repeats) | 0 |
 | Cross-tenant leaks (store_A/B/C matrix) | 0 |
 | Illegal state transitions (N x N = 361 checks) | 0 |
@@ -17,7 +17,7 @@ Generated from live runs (mock provider unless noted).
 ## Reliability
 | check | result |
 |---|---|
-| pytest | 122 passed in 2.04s |
+| pytest | 144 passed in 1.92s |
 | Golden E2E reproducibility | 50/50 identical |
 | Rollout resume after crash (5 steps, fail at 3) | 5/5, 5 rows, no dupes |
 
@@ -25,9 +25,9 @@ Generated from live runs (mock provider unless noted).
 | tier | accuracy |
 |---|---|
 | Tier1 canonical (harness correctness, NOT model quality) | 1.0000 95%CI[0.7961,1.0000] n=15 |
-| Tier2 generated | 0.9333 95%CI[0.9064,0.9529] n=450 |
+| Tier2 generated | 1.0000 95%CI[0.9915,1.0000] n=450 |
 | Tier3 adversarial | 1.0000 95%CI[0.5101,1.0000] n=4 |
-| Private held-out (never tuned to) | 1.0000 95%CI[0.5655,1.0000] n=5 |
+| Private held-out (never tuned to) | 1.0000 95%CI[0.9647,1.0000] n=105 |
 | Abstention (IDK family Tier1) | 3/3 |
 | Unsafe actions (all tiers) | 0 |
 
@@ -44,9 +44,15 @@ numeric calibration requires live-model data (Future Work).
 ## Judge calibration
 - free-form vs rubric kappa: 1.0
 - rubric vs evidence kappa: 1.0
-- human(6 labeled) vs rubric: agreement 0.6666666666666666, kappa 0.0 — 2 DELIBERATE disagreements proving the grader can be wrong (GRADER_FAILURE demo).
+- rubric drift v1 vs v2: agreement 1.0, kappa 1.0, changed=[]
+- human gold (human-gold-v1, n=24, single rater) vs rubric: 5 worked disagreements in docs/reports/disagreements.md (vague-cause x2, transient over-confidence x2, single-cause over-claim x1). Statistically negligible; methodologically load-bearing.
 - Grader mutation testing: wrong-diagnosis / thin-evidence / false-confidence mutants all caught (tests/test_grader_mutation.py).
-- Honest caveat: n=6 human labels is far too small for judge-reliability claims. Design for n=300 (100 easy/100 ambiguous/100 adversarial, 75 double-labeled) is documented; not yet run.
+- Metamorphic judge tests (order/verbosity/statelessness): heuristic judges invariant by construction (tests/test_judge_bias.py); live-judge protocol defined, awaiting key.
+- Bigger experiment (NOT yet run): n=300 (100 easy / 100 ambiguous / 100 adversarial), >=75 double-labeled, human↔human kappa + per-class P/R + drift tracking.
+
+## Live-model evaluation: PENDING (no key in this environment)
+- Harness built and contract-tested: evals/live_eval.py conditions B (live investigator) and C (live freeform-vs-rubric judges), frozen prompts (invest_rank_v1, judge_freeform_v1, judge_rubric_v1), temperature recorded, per-call tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID without key (never silent).
+- First experiment pre-registered: same Tier1 gold set, mock vs gpt-4o-mini freeform vs gpt-4o-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
 
 ## Failure analysis (by class)
 - WRONG_HYPOTHESIS v0.1 (deploy-blame) -> dependency-first fix, verified by misleading_corr.

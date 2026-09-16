@@ -24,6 +24,18 @@ jobs:
       - run: uv run python evals/runner/run.py --tiers 1,2,3 --variants 10 --seeds 3 --include-private
       - run: uv run python evals/judges/judges.py
       - run: uv run python scripts/scorecard.py
+  live-model:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra dev
+      # Fails loudly (exit 3) without OPENAI_API_KEY: a missing live baseline
+      # must be a visible red job, never a silent green. Owner sets the secret.
+      - run: uv run python evals/live_eval.py --condition C
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   nightly:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'

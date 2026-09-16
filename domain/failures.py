@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from pydantic import BaseModel
+
 
 class FailureClass(str, Enum):
     MODEL_REASONING_FAILURE = "MODEL_REASONING_FAILURE"
@@ -32,3 +34,18 @@ def classify(m: dict) -> str:
     if m.get("evidence_n", 0) < 4:
         return FailureClass.MISSING_EVIDENCE.value
     return FailureClass.WRONG_HYPOTHESIS.value
+
+
+class FailureRecord(BaseModel):
+    """Causal record rule: a category WITHOUT evidence is incomplete.
+
+    Every entry must cite the exact observation that justifies the category
+    (expected X, observed Y, therefore Z) — never a bare label.
+    """
+
+    scenario: str
+    category: FailureClass
+    evidence: str
+    impact: str = ""
+    fix: str = ""
+    status: str = "open"  # open | fixed-verified | accepted-limitation
