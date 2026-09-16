@@ -1,33 +1,125 @@
 # Revenue Guard
 
-Evidence-driven incident response for commerce. Correlates revenue-journey
-telemetry with application, dependency, and deployment signals; uses an LLM
-only for hypothesis generation and evidence interpretation; moves verified
-remediations through deterministic staging and approval.
+An evidence-driven incident response system for commerce. It correlates
+revenue-journey telemetry with application, dependency, and deployment signals;
+uses an LLM only for hypothesis generation and evidence interpretation; and moves
+verified remediations through a deterministic staging and approval workflow.
 
-Independent project inspired by publicly described commerce reliability
-problems. Not Urumi internals. See `docs/assumptions.md`.
+Independent project inspired by publicly described commerce reliability problems.
+Not Urumi internals — see `docs/assumptions.md` and `docs/urumi-analysis.md`.
 
-## Why I Built This / Problem / Product Thesis
+## Why I Built This
 
-Uptime can be green while checkout bleeds: partial regressions (slow
-checkout, payment failures, mobile-only collapse) don't trip `GET /` checks.
-Vanilla Woo-MCP sees commerce data but not infra traces/deploy/staging.
-Revenue Guard joins both and ranks by $ impact.
+I studied Urumi's public product direction (Revenue/Builder/Analytics AI, MCP,
+Dev-only writes, staging + rollback) and noticed the recurring gap: traditional
+uptime can report healthy while customers cannot complete purchases. The FDE role
+Urumi hires for — discover pain, prototype, deploy, iterate, eval-harness,
+production-harden, generalize to platform — is exactly this loop.
 
-## System / Agent / Detection / Investigation / Revenue / Remediation
+## Problem
 
-See `docs/architecture.md` + `docs/decisions.md`. Boring detector
-(rolling z + prev-period + percentiles) -> stage-gated ToolRegistry ->
-iterative hypotheses <-> evidence -> deterministic counterfactual
-(`expected=sessions*baseline`, `lost=expected-observed`) -> DRY_RUN ->
-staging -> validation -> approval -> symmetric verification.
+Partial regressions (slow checkout, payment-fail rise, mobile-only collapse,
+pricing mismatch, cache bust) don't trip `GET /` checks. A vanilla WooCommerce
+agent sees commerce data but not infra traces, deploy history, or staging state —
+so it can't answer "did our last deploy hurt conversion, and what do we do safely?"
 
-## Evaluation / Failure Analysis / Red Teaming / Tradeoffs / Results
+## Product Thesis
 
-`uv run python evals/runner/run.py` runs `evals/cases/*.yaml` (golden +
-misleading-correlation + insufficient-evidence). Report:
-`evals/reports/latest.json`. Judge calibration + failure taxonomy land in P2.
+Revenue-aware monitoring: lead with lost orders / $ impact / affected journey /
+confidence / recommended action; keep raw infra metrics one click down. Observed
+metrics and estimated counterfactuals are always labeled separately, and the
+system says INSUFFICIENT_EVIDENCE when telemetry can't support a claim.
+
+## System Architecture
+
+```
+Commerce (sim default, Woo optional) -> deterministic telemetry ->
+deterministic detection -> stage-gated ToolRegistry -> LLM hypothesis/evidence ->
+deterministic diagnosis + counterfactual impact -> DRY_RUN -> staging ->
+deterministic validation -> human approval -> prod -> symmetric verification ->
+evals + provenance
+```
+
+See `docs/architecture.md`. Postgres = record (SQLite fallback locally, Redis
+optional/ephemeral only). MCP is a read-only adapter over the same registry.
+
+## Agent Architecture
+
+Iterative, deterministic state machine:
+`DETECTED -> TRIAGED -> INITIAL_HYPOTHESES ⇄ COLLECT_EVIDENCE ⇄ UPDATE_HYPOTHESES
+-> DIAGNOSIS -> IMPACT -> RECOMMENDATION -> DRY_RUN -> STAGING -> VALIDATION ->
+APPROVAL -> DEPLOYED -> VERIFICATION -> RESOLVED` (+ INSUFFICIENT_EVIDENCE etc.).
+10 typed tools, stage-gated in code. LLM (GPT-4o-mini, mockable offline) only
+ranks hypotheses / interprets evidence / narrates. No raw CoT in UI — evidence
+objects with `observed_at/collected_at/freshness` + diagnosis with
+HIGH/MEDIUM/LOW + breakdown.
+
+## Detection
+
+Boring by design: rolling z-score + prev-period + p50/p95, emitting
+`baseline/current/deviation%`. No ML detector. Tuned on seeded baselines.
+
+## Investigation
+
+Competing hypotheses (2–4) with supporting/contradicting/missing evidence and
+the discriminating measurement named. Dependency-first ordering (payment/
+pricing/cohort before deploy-blame) after the v0.1 misleading-correlation failure.
+
+## Root Cause Analysis
+
+Diagnosis record links every claim to evidence_ids; freshness-weighted;
+`causal_direct` honestly `weak` (correlation, not proven causation) until
+validation proves recovery.
+
+## Revenue Impact
+
+Counterfactual: `expected = sessions × baseline_conv`,
+`lost = expected − observed`, `impact = lost × AOV`
+(e.g. 12,000 × 3.8% = 456 expected vs 300 observed → 156 lost × $84 ≈ $13,104).
+Refuses when under-sampled.
+
+## Safe Remediation
+
+`RECOMMENDATION -> DRY_RUN ("WOULD rollback, nothing done") -> STAGING ->
+VALIDATION (synthetic checkout) -> APPROVAL (explicit human) -> PROD ->
+VERIFICATION (same signals re-checked)`. Idempotency-keyed writes; prod refuses
+without APPROVED approval; multi-step rollouts journal + resume.
+
+## Evaluation
+
+15-case benchmark (`evals/cases/`): bad deploy, payment/ship/DB/cache, traffic,
+mobile-only, pricing, false alarm, telemetry gap, multi-fault, misleading
+correlation, delayed, transient, bad-rollback. Runner measures detection,
+root-cause, FP/FN, evidence count, unsafe actions, time. 3 judges
+(free-form/rubric/evidence) + human labels with Cohen's kappa — including 2
+deliberate human-vs-judge disagreements proving the grader can be wrong.
+Current: accuracy 15/15 (mock; harness measures, mock is matched by
+construction), unsafe 0/15, human-vs-rubric kappa 0.0 (expected — see
+`docs/evaluation.md`).
+
+## Failure Analysis
+
+v0.1 deploy-blame → dependency-first fix; transient over-confidence accepted as
+known limitation; pricing never auto-modified. Full log: `docs/failure-analysis.md`.
+Taxonomy: 15 classes in `domain/failures.py`.
+
+## Red Teaming
+
+Injection in commerce content blocked; stale/gapped telemetry → IDK; partial
+rollout crash resumes without double-apply (`tests/test_redteam.py`); duplicate
+rollback returns stored result; stage-gating raises PermissionError.
+
+## Tradeoffs (intentionally NOT built)
+
+No K8s/Kafka/vector-DB/LangGraph-first/MCP-first/ML-detector/Next.js. Redis
+optional. Real-Woo profile bounded to 4 checks. Numeric confidence only after
+calibration. See `docs/decisions.md`.
+
+## Results
+
+`uv run pytest` 11 passed · `ruff` clean · eval accuracy 1.00 (n=15, mock) ·
+unsafe 0 · judges kappa 1.00 inter-judge / 0.00 human-vs-rubric (2 deliberate
+disagreements) · golden E2E verify PASS. Details: `docs/evaluation.md`.
 
 ## Running Locally
 
@@ -37,18 +129,21 @@ uv sync --extra dev
 uv run python commerce/sim/seed.py
 uv run pytest -q
 uv run python evals/runner/run.py
-uvicorn apps.api.main:app --port 8000  # POST /investigate
-docker compose up --build  # postgres profile
+uv run python evals/judges/judges.py
+uvicorn apps.api.main:app --port 8000   # dashboard at /ui, JSON at /investigate
+docker compose up --build                 # postgres profile
 docker compose -f docker-compose.yml -f docker-compose.woo.yml up  # optional real Woo
+printf '{"id":1,"method":"tools/list"}\n' | uv run python agent/mcp_adapter.py
 ```
 
-## Demo (golden: bad_shipping_deploy_001)
+## Demo
 
-Seed -> `POST /admin/deploy {v2.4.1}` on sim-store -> checkout p95 ~450->~1650ms,
-conv 3.8%->~2.5% -> `POST /investigate` shows competing hypotheses + evidence +
-counterfactual ($13k-style) + DRY_RUN -> stage -> validate -> approve -> verify PASS.
+Golden `bad_shipping_deploy_001`: seed → inject v2.4.1 → checkout ~1650ms /
+conv ~2.5% → investigate (HIGH, evidence-linked) → counterfactual $ → DRY_RUN →
+stage → validate PASS → approve → verify PASS → RESOLVED. Full script: `docs/demo.md`.
 
 ## Future Work
 
-Postgres persistence, HTMX dashboard, 15-case suite + κ calibration,
-MCP adapter, nightly Woo profile.
+Postgres-backed run history in UI, HTMX polish + charts, nightly Woo profile in CI,
+official MCP SDK swap, alert hysteresis for transients, per-cohort AOV, cost/latency
+tracking at 10→1000 stores (store_id boundary already in schema).
