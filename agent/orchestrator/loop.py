@@ -8,22 +8,28 @@ from __future__ import annotations
 from agent.providers.llm import get_provider
 from agent.tools.registry import ToolRegistry
 from domain.models import Confidence, Diagnosis, Hypothesis, Incident, IncidentState
+from domain.state_machine import transition
 
 
 def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_deploy_001") -> Incident:
     reg = ToolRegistry()
     inc = Incident(store_id=store_id, state=IncidentState.DETECTED)
 
-    # TRIAGE (stage-gated reads)
-    m, ev1 = reg.get_checkout_metrics("TRIAGE")
-    _conv, ev2 = reg.get_conversion_metrics("TRIAGE")
-    _dep, ev3 = reg.get_recent_deploys("TRIAGE")
+    # TRIAGE (stage-gated reads; tool failure -> honest IDK, never crash)
+    try:
+        m, ev1 = reg.get_checkout_metrics("TRIAGE")
+        _conv, ev2 = reg.get_conversion_metrics("TRIAGE")
+        _dep, ev3 = reg.get_recent_deploys("TRIAGE")
+    except Exception as e:  # noqa: BLE001 - triage outage means no basis for diagnosis
+        transition(inc, IncidentState.INSUFFICIENT_EVIDENCE)
+        inc.signals["tool_failure"] = f"{type(e).__name__}: {e}"
+        return inc
     inc.evidence += [ev1, ev2, ev3]
     det = m["detection"]
     if not det.breached:
-        inc.state = IncidentState.INSUFFICIENT_EVIDENCE
+        transition(inc, IncidentState.INSUFFICIENT_EVIDENCE)
         return inc
-    inc.state = IncidentState.TRIAGED
+    transition(inc, IncidentState.TRIAGED)
     inc.signals = {"summary": det.summary}
 
     # INITIAL_HYPOTHESES ⇄ COLLECT_EVIDENCE ⇄ UPDATE_HYPOTHESES (2 rounds max MVP)
@@ -31,24 +37,24 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     flags = _signal_flags(det, tele_gap=False)
     recent_deploy = flags["recent_deploy"]
     ranked = provider.rank_hypotheses(**flags)
-    inc.state = IncidentState.INITIAL_HYPOTHESES
+    transition(inc, IncidentState.INITIAL_HYPOTHESES)
     inc.hypotheses = [Hypothesis(name=h["name"]) for h in ranked]
 
     # Round 1 evidence (hostile-review fix: tool failure degrades to IDK, never crashes)
-    inc.state = IncidentState.COLLECT_EVIDENCE
+    transition(inc, IncidentState.COLLECT_EVIDENCE)
     try:
         dep_payload, ev_dep = reg.get_dependency_health("INVESTIGATING")
         _, ev_log = reg.get_error_logs("INVESTIGATING")
         _, ev_diag = reg.get_diagnostics(stage="INVESTIGATING")
     except Exception as e:  # noqa: BLE001 - any tool/infra failure must degrade to IDK
-        inc.state = IncidentState.INSUFFICIENT_EVIDENCE
+        transition(inc, IncidentState.INSUFFICIENT_EVIDENCE)
         inc.signals["tool_failure"] = f"{type(e).__name__}: {e}"
         return inc
     inc.evidence += [ev_dep, ev_log, ev_diag]
     tele_gap = bool(dep_payload.get("unavailable"))
 
     # Round 2: update hypotheses with fresh evidence
-    inc.state = IncidentState.UPDATE_HYPOTHESES
+    transition(inc, IncidentState.UPDATE_HYPOTHESES)
     flags2 = _signal_flags(det, tele_gap=tele_gap)
     flags2["ship_spike"] = flags2["ship_spike"] and not tele_gap
     flags2["checkout_spike"] = True
@@ -60,7 +66,7 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
                       for h in ranked2]
 
     if tele_gap and not recent_deploy:
-        inc.state = IncidentState.INSUFFICIENT_EVIDENCE
+        transition(inc, IncidentState.INSUFFICIENT_EVIDENCE)
         return inc
 
     # DIAGNOSIS (deterministic record from ranked list)
@@ -80,20 +86,20 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
         missing=["exact query plan"] if "deploy" in top else [],
         reasoning_summary=f"Top hypothesis {top} from competing set "
                           f"{[h['name'] for h in ranked2]}; see linked evidence.")
-    inc.state = IncidentState.DIAGNOSIS
+    transition(inc, IncidentState.DIAGNOSIS)
 
     # IMPACT (deterministic counterfactual)
     impact_payload, ev_imp = reg.estimate_revenue_impact("IMPACT_ESTIMATION")
     inc.evidence.append(ev_imp)
     inc.signals["impact"] = impact_payload["impact"].model_dump()
-    inc.state = IncidentState.IMPACT_ESTIMATION
+    transition(inc, IncidentState.IMPACT_ESTIMATION)
 
     # RECOMMENDATION + DRY_RUN (no writes yet)
-    inc.state = IncidentState.RECOMMENDATION
+    transition(inc, IncidentState.RECOMMENDATION)
     inc.signals["recommendation"] = (
         "rollback shipping-plugin v2.4.1 -> v2.4.0" if "shipping" in top or "deploy" in top
         else "investigate further; no safe rollback identified")
-    inc.state = IncidentState.DRY_RUN
+    transition(inc, IncidentState.DRY_RUN)
     inc.signals["dry_run"] = f"WOULD execute: {inc.signals['recommendation']}. No action taken."
     return inc
 

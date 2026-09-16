@@ -13,9 +13,13 @@ from pathlib import Path
 SCHEMA = Path(__file__).parent / "postgres" / "schema.sql"
 
 
+class IntentConflictError(ValueError):
+    """Same idempotency key reused with a DIFFERENT action/target -> reject."""
+
+
 def connect(path: str | None = None) -> sqlite3.Connection:
     db = path or os.getenv("RG_DB", "./revenue_guard.db")
-    con = sqlite3.connect(db)
+    con = sqlite3.connect(db, timeout=30.0)
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA.read_text())
     return con
@@ -23,15 +27,29 @@ def connect(path: str | None = None) -> sqlite3.Connection:
 
 def record_action(con: sqlite3.Connection, *, key: str, action: str,
                   target: str, result: str) -> tuple[dict, bool]:
-    """Idempotent write. Returns (row, created?). Repeats return stored row."""
-    cur = con.execute("SELECT * FROM agent_actions WHERE idempotency_key=?", (key,))
-    row = cur.fetchone()
-    if row:
-        return dict(row), False
-    con.execute(
-        "INSERT INTO agent_actions(idempotency_key, action, target, result) VALUES (?,?,?,?)",
-        (key, action, target, result))
-    con.commit()
+    """Atomic idempotent write.
+
+    - INSERT-first (no SELECT-then-INSERT race): concurrent duplicates collapse
+      to exactly one stored side effect via the PRIMARY KEY.
+    - Same key + different (action, target) -> IntentConflictError (a retry must
+      repeat the same intent, never smuggle a new one under an old key).
+    Returns (row, created?).
+    """
+    try:
+        con.execute(
+            "INSERT INTO agent_actions(idempotency_key, action, target, result)"
+            " VALUES (?,?,?,?)", (key, action, target, result))
+        con.commit()
+    except sqlite3.IntegrityError:
+        row = con.execute("SELECT * FROM agent_actions WHERE idempotency_key=?",
+                          (key,)).fetchone()
+        assert row is not None
+        stored = dict(row)
+        if stored["action"] != action or stored["target"] != target:
+            raise IntentConflictError(
+                f"key {key} bound to {stored['action']}/{stored['target']}, "
+                f"refusing {action}/{target}")
+        return stored, False
     return {"idempotency_key": key, "action": action, "target": target,
             "result": result}, True
 
