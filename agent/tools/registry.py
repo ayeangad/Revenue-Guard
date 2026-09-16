@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime
 
 from commerce.sim.state import STATE
 from domain.detection import detect_checkout_regression
@@ -25,11 +25,17 @@ STAGE_TOOLS: dict[str, set[str]] = {
 def _ev(tool: str, args: dict, claim: str, source_type: str, source_id: str,
          observed_at: datetime, reliability: str = "medium",
          obs_ids: list[str] | None = None) -> Evidence:
+    from datetime import timedelta
     h = hashlib.sha256(str(sorted(args.items())).encode()).hexdigest()[:10]
+    # Single-clock rule (hostile finding C4): observed and collected MUST share
+    # the sim clock. Mixing sim-time observations with wall-clock collection
+    # made EVERYTHING look stale. collected = observed + collector lag
+    # (evidence_age_s hook simulates a laggy collector for Tier3).
+    collected_at = observed_at + timedelta(seconds=STATE.evidence_age_s)
     return Evidence(
         tool_name=tool, tool_args_hash=h, extracted_claim=claim,
         source_type=source_type, source_id=source_id,
-        observed_at=observed_at, collected_at=datetime.now(UTC),
+        observed_at=observed_at, collected_at=collected_at,
         freshness_window_s=300, observation_ids=obs_ids or [new_id("obs")],
         reliability=reliability,  # type: ignore[arg-type]
     )

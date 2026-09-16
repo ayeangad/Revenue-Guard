@@ -49,6 +49,7 @@ class SimState:
     aov: float = 84.0
     plugin_version: str = "2.4.0"
     checkout_latency_ms: float = 450.0
+    evidence_age_s: float = 0.0  # test hook: simulate stale collectors
 
     def now(self) -> datetime:
         return self.clock.now()

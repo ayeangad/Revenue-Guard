@@ -20,11 +20,22 @@ class MockProvider:
                         payment_spike: bool = False, pricing_anomaly: bool = False,
                         mobile_only: bool = False, db_spike: bool = False,
                         cache_drop: bool = False, **_kw) -> list[dict]:
+        hyps = self._base(checkout_spike, ship_spike, recent_deploy, payment_spike,
+                          pricing_anomaly, mobile_only, db_spike, cache_drop)
         if telemetry_gap:
-            return [{"name": "unknown_insufficient_evidence", "confidence": "LOW"}]
-        hyps: list[dict] = []
+            # Gap must cap confidence, not erase evidence: keep ranked hyps at LOW
+            # and offer explicit abstention as a competing alternative.
+            capped = [{"name": h["name"], "confidence": "LOW"} for h in hyps]
+            capped.append({"name": "unknown_insufficient_evidence", "confidence": "LOW"})
+            return capped[:4]
+        return hyps
+
+    def _base(self, checkout_spike: bool, ship_spike: bool, recent_deploy: bool,
+              payment_spike: bool, pricing_anomaly: bool, mobile_only: bool,
+              db_spike: bool, cache_drop: bool) -> list[dict]:
         # Order matters: most specific first. Dependency-first rule (v0.4 lesson):
         # check payment/pricing/cohort signals before blaming the most recent deploy.
+        hyps: list[dict] = []
         if payment_spike:
             hyps.append({"name": "payment_gateway_degradation", "confidence": "HIGH"})
         if pricing_anomaly:

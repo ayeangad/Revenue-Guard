@@ -72,3 +72,17 @@ def get_approval(con: sqlite3.Connection, approval_id: str) -> dict | None:
     row = con.execute("SELECT * FROM approvals WHERE approval_id=?",
                       (approval_id,)).fetchone()
     return dict(row) if row else None
+
+
+def save_incident(con: sqlite3.Connection, incident_id: str, store_id: str,
+                  journey: str, state: str, diagnosis: str = "") -> None:
+    con.execute("INSERT OR REPLACE INTO incidents(incident_id, store_id, journey,"
+                " state, diagnosis) VALUES (?,?,?,?,?)",
+                (incident_id, store_id, journey, state, diagnosis))
+    con.commit()
+
+
+def incidents_for(con: sqlite3.Connection, store_id: str) -> list[dict]:
+    """Tenant-scoped read: the ONLY way UI/evals list incidents (no leaks)."""
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM incidents WHERE store_id=?", (store_id,))]

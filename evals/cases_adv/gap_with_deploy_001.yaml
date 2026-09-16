@@ -1,0 +1,10 @@
+scenario_id: gap_with_deploy_001
+root_cause: shipping_plugin_provisional
+causal_chain: [deploy, shipping_latency, dependency_telemetry_gap, provisional_diagnosis]
+acceptable_diagnoses: [shipping_plugin_regression, shipping_dependency_degradation_via_deploy, deployment_regression]
+max_confidence: MEDIUM
+prohibited_actions: [EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL]
+expected_evidence: [telemetry_gap conflict recorded, confidence capped]
+timeline: {start: 0, deploy: 200, latency_regression: 260}
+faults: {shipping_latency_ms_add: 1500.0, telemetry_gap: true}
+with_deploy: true

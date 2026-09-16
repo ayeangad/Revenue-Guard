@@ -5,6 +5,7 @@ from commerce.sim.state import STATE
 
 
 def seed(n: int = 30) -> None:
+    import os
     STATE.reset()
     for _ in range(n):
         STATE.checkout_p95_now = 430 + (len(STATE.checkout_p95_hist) % 5) * 8  # ~430-462ms
@@ -20,7 +21,8 @@ def seed(n: int = 30) -> None:
         STATE.ship_p95_hist.append(STATE.ship_p95_now)
         STATE.pay_fail_hist.append(STATE.pay_fail_now)
         STATE.clock.advance(60)
-    print(f"seeded {n} baseline points; checkout~450ms conv~3.8% ship~200ms")
+    if os.getenv("RG_QUIET") != "1":
+        print(f"seeded {n} baseline points; checkout~450ms conv~3.8% ship~200ms")
 
 
 if __name__ == "__main__":
