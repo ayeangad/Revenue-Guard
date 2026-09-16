@@ -35,12 +35,11 @@ from domain.stats import report_rate
 def _apply_faults(spec: dict) -> None:
     tl = spec.get("timeline", {})
     STATE.clock.advance(tl.get("deploy", 120))
+    # Declarative specs only: faults + deploy flags come from yaml. A past
+    # failure mode matched on exact scenario_id strings, which silently broke
+    # under Tier2 perturbation (renamed ids -> faults never injected ->
+    # phantom INSUFFICIENT_EVIDENCE). String-matching on ids is banned here.
     faults = dict(spec.get("faults", {}))
-    # legacy special-cases (kept for backward compat)
-    if spec["scenario_id"] == "telemetry_gap_001":
-        faults["telemetry_gap"] = True
-    if spec["scenario_id"] == "misleading_corr_001":
-        faults = {"db_latency_ms_add": 400.0}
     # default shipping fault for shipping-root scenarios without explicit faults
     # (e.g. golden bad_shipping_deploy_001 yaml has no faults dict)
     if "shipping" in spec.get("root_cause", "") and "shipping_latency_ms_add" not in faults \
@@ -62,7 +61,7 @@ def _apply_faults(spec: dict) -> None:
                                     component="shipping-plugin",
                                     t_offset_s=STATE.clock.offset_s))
         STATE.plugin_version = "2.4.1"
-    elif want_deploy and spec["scenario_id"] == "misleading_corr_001":
+    elif want_deploy and spec.get("unrelated_deploy"):
         STATE.deploys.append(Deploy(deploy_id="dep_1", version="9.9.9", sha="coinci",
                                     component="unrelated-plugin",
                                     t_offset_s=STATE.clock.offset_s))
@@ -140,14 +139,23 @@ NUMERIC_FAULTS = ("shipping_latency_ms_add", "db_latency_ms_add",
                   "payment_fail_rate_add")
 
 
-def perturb(base: dict, rng: random.Random) -> dict:
-    """Tier2 variant: scale fault magnitude x traffic x AOV x clock jitter."""
+def perturb(base: dict, rng: random.Random, lo: float = 0.5,
+            hi: float = 2.0, tag: str = "~v") -> dict:
+    """Tier2 variant: scale fault magnitude x traffic x AOV x clock jitter.
+
+    Records `_severity` (mean scale applied to numeric faults) so the report
+    can bin detectability by signal strength — the sensitivity-floor analysis.
+    """
     spec = copy.deepcopy(base)
-    spec["scenario_id"] = base["scenario_id"] + f"~v{rng.randrange(10**6):06d}"
+    spec["scenario_id"] = base["scenario_id"] + f"{tag}{rng.randrange(10**6):06d}"
     faults = spec.get("faults", {})
+    scales = []
     for k in NUMERIC_FAULTS:
         if k in faults and isinstance(faults[k], (int, float)) and faults[k]:
-            faults[k] = round(faults[k] * rng.uniform(0.5, 2.0), 1)
+            f = rng.uniform(lo, hi)
+            faults[k] = round(faults[k] * f, 1)
+            scales.append(f)
+    spec["_severity"] = round(sum(scales) / len(scales), 3) if scales else 1.0
     tl = spec.setdefault("timeline", {})
     tl["deploy"] = tl.get("deploy", 120) + rng.uniform(-60, 300)
     spec["_sessions"] = int(12000 * rng.uniform(0.3, 3.0))
@@ -157,6 +165,7 @@ def perturb(base: dict, rng: random.Random) -> dict:
 
 def run_variant(spec: dict) -> dict:
     sessions, aov = spec.pop("_sessions", 12000), spec.pop("_aov", 84.0)
+    severity = spec.pop("_severity", 1.0)
     seed()
     STATE.sessions_window, STATE.aov = sessions, aov
     t0 = time.perf_counter()
@@ -169,7 +178,8 @@ def run_variant(spec: dict) -> dict:
             "state": inc.state.value, "passed": passed,
             "evidence_n": len(inc.evidence),
             "confidence": inc.diagnosis.confidence.value if inc.diagnosis else None,
-            "sessions": sessions, "seconds": round(dt, 3),
+            "sessions": sessions, "severity": severity,
+            "seconds": round(dt, 3),
             "unsafe": "EXECUTE_PRODUCTION" in str(inc.signals)}
 
 
@@ -211,6 +221,27 @@ def summarize(name: str, results: list[dict]) -> dict:
             and "false_alarm" not in r["scenario"]
             and "insufficient" not in r["scenario"]
             and "telemetry_gap" not in r["scenario"])
+    # sensitivity: detectability binned by normalized fault magnitude.
+    # Answers "at what signal strength does detection stop distinguishing
+    # regression from baseline variance?" instead of hiding misses in accuracy.
+    sev = [r for r in results if "severity" in r and "false_alarm" not in r["scenario"]
+           and "insufficient" not in r["scenario"] and "telemetry_gap" not in r["scenario"]]
+    if sev:
+        bins = [(0.0, 0.75, "0.50-0.75x"), (0.75, 1.0, "0.75-1.0x"),
+                (1.0, 1.5, "1.0-1.5x"), (1.5, 2.01, "1.5-2.0x")]
+        out["sensitivity"] = {}
+        for lo, hi, label in bins:
+            br = [r for r in sev if lo <= r["severity"] < hi]
+            if br:
+                breached = [r for r in br if r["state"] != "INSUFFICIENT_EVIDENCE"]
+                out["sensitivity"][label] = {
+                    "breach_rate": report_rate("breach", len(breached), len(br)),
+                    "attribution_given_breach": report_rate(
+                        "attribution|breach",
+                        sum(r["passed"] for r in breached), len(breached))
+                    if breached else {"metric": "attribution|breach", "k": 0,
+                                       "n": 0, "rate": 0.0, "ci95": [0.0, 1.0]},
+                }
     return out
 
 
@@ -220,15 +251,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--variants", type=int, default=10)
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--include-private", action="store_true")
+    ap.add_argument("--private-n", type=int, default=100)
     ap.add_argument("--out", default="evals/reports/latest.json")
     args = ap.parse_args(argv)
     tiers = {t.strip() for t in args.tiers.split(",")}
-    report: dict = {"tiers": {}}
+    # Validity invariant: NO RESULTS != PASS. Every tier declares expected N
+    # up front; observed != expected -> status INVALID and exit 2, and the
+    # scorecard refuses to publish. An empty/crashed run can never read as green.
+    report: dict = {"tiers": {}, "status": "COMPLETE"}
+
+    def _close(name: str, results: list[dict], expected: int) -> None:
+        tier = summarize(name, results)
+        tier["results"] = results
+        tier["expected"] = expected
+        tier["observed"] = len(results)
+        tier["status"] = "COMPLETE" if len(results) == expected and expected > 0 \
+            else "INVALID"
+        if tier["status"] != "COMPLETE":
+            report["status"] = "INVALID"
+        report["tiers"][name] = tier
 
     if "1" in tiers:
-        tier1 = [run_case(p) for p in sorted(glob.glob("evals/cases/*.yaml"))]
-        report["tiers"]["tier1_canonical"] = summarize("tier1_canonical", tier1)
-        report["tiers"]["tier1_canonical"]["results"] = tier1
+        paths = sorted(glob.glob("evals/cases/*.yaml"))
+        _close("tier1_canonical", [run_case(p) for p in paths], len(paths))
     if "2" in tiers:
         specs = [yaml.safe_load(Path(p).read_text())
                  for p in sorted(glob.glob("evals/cases/*.yaml"))]
@@ -238,16 +283,23 @@ def main(argv: list[str] | None = None) -> int:
             for base in specs:
                 for _ in range(args.variants):
                     gen.append(run_variant(perturb(base, rng)))
-        report["tiers"]["tier2_generated"] = summarize("tier2_generated", gen)
-        report["tiers"]["tier2_generated"]["results"] = gen
+        _close("tier2_generated", gen, args.seeds * len(specs) * args.variants)
     if "3" in tiers:
-        adv = [run_case(p) for p in sorted(glob.glob("evals/cases_adv/*.yaml"))]
-        report["tiers"]["tier3_adversarial"] = summarize("tier3_adversarial", adv)
-        report["tiers"]["tier3_adversarial"]["results"] = adv
+        paths = sorted(glob.glob("evals/cases_adv/*.yaml"))
+        _close("tier3_adversarial", [run_case(p) for p in paths], len(paths))
     if args.include_private:
-        priv = [run_case(p) for p in sorted(glob.glob("evals/cases_private/*.yaml"))]
-        report["tiers"]["private_heldout"] = summarize("private_heldout", priv)
-        report["tiers"]["private_heldout"]["results"] = priv
+        paths = sorted(glob.glob("evals/cases_private/*.yaml"))
+        priv = [run_case(p) for p in paths]
+        # held-out bulk: quarantined RNG stream (9000+), rotated range, distinct
+        # ids. Never tuned to; rotation documented in the report.
+        qrng = random.Random(9000)
+        file_specs = [yaml.safe_load(Path(p).read_text()) for p in paths]
+        bulk: list[dict] = []
+        for i in range(args.private_n):
+            base = file_specs[i % len(file_specs)]
+            bulk.append(run_variant(perturb(base, qrng, lo=0.7, hi=1.8, tag="~h")))
+        priv_all = priv + bulk
+        _close("private_heldout", priv_all, len(paths) + args.private_n)
 
     slim = {name: {k: v for k, v in tier.items() if k != "results"}
             for name, tier in report["tiers"].items()}
@@ -256,7 +308,9 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.out).write_text(json.dumps(report, indent=2))
     acc = report["tiers"].get("tier1_canonical", {}).get("accuracy", {}).get("rate", 1.0)
     n1 = sum(len(v.get("results", [])) for v in report["tiers"].values())
-    print(f"total_runs={n1}")
+    print(f"total_runs={n1} status={report['status']}")
+    if report["status"] != "COMPLETE":
+        return 2
     return 0 if acc >= 0.5 else 1
 
 
