@@ -3,6 +3,14 @@ from __future__ import annotations
 
 import os
 
+ALLOWED_HYPOTHESES = {
+    "shipping_plugin_regression", "shipping_dependency_degradation",
+    "shipping_dependency_degradation_via_deploy", "deployment_regression",
+    "traffic_resource_saturation", "payment_gateway_degradation", "pricing_bug",
+    "mobile_checkout_regression", "database_regression", "cache_failure",
+    "unknown_insufficient_evidence",
+}
+
 
 class MockProvider:
     """Heuristic hypothesis ranking without network. Used in tests/CI."""
@@ -65,7 +73,13 @@ class OpenAIProvider:
                 max_tokens=300, temperature=0)
             import json
             txt = resp.choices[0].message.content or "[]"
-            return json.loads(txt[txt.find("["):txt.rfind("]") + 1])
+            out = json.loads(txt[txt.find("["):txt.rfind("]") + 1])
+            # Hostile-review fix: never trust model output shape/names.
+            # Unknown names or bad confidence -> fall back to deterministic mock.
+            clean = [h for h in out if isinstance(h, dict)
+                     and h.get("name") in ALLOWED_HYPOTHESES
+                     and h.get("confidence") in ("HIGH", "MEDIUM", "LOW")]
+            return clean if clean else MockProvider().rank_hypotheses(**ctx)
         except Exception:  # noqa: BLE001 - fallback to deterministic mock
             return MockProvider().rank_hypotheses(**ctx)
 

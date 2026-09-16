@@ -34,11 +34,16 @@ def investigate(store_id: str = "demo-store", scenario_id: str = "bad_shipping_d
     inc.state = IncidentState.INITIAL_HYPOTHESES
     inc.hypotheses = [Hypothesis(name=h["name"]) for h in ranked]
 
-    # Round 1 evidence
+    # Round 1 evidence (hostile-review fix: tool failure degrades to IDK, never crashes)
     inc.state = IncidentState.COLLECT_EVIDENCE
-    dep_payload, ev_dep = reg.get_dependency_health("INVESTIGATING")
-    _, ev_log = reg.get_error_logs("INVESTIGATING")
-    _, ev_diag = reg.get_diagnostics(stage="INVESTIGATING")
+    try:
+        dep_payload, ev_dep = reg.get_dependency_health("INVESTIGATING")
+        _, ev_log = reg.get_error_logs("INVESTIGATING")
+        _, ev_diag = reg.get_diagnostics(stage="INVESTIGATING")
+    except Exception as e:  # noqa: BLE001 - any tool/infra failure must degrade to IDK
+        inc.state = IncidentState.INSUFFICIENT_EVIDENCE
+        inc.signals["tool_failure"] = f"{type(e).__name__}: {e}"
+        return inc
     inc.evidence += [ev_dep, ev_log, ev_diag]
     tele_gap = bool(dep_payload.get("unavailable"))
 
