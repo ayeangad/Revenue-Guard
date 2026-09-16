@@ -1,0 +1,24 @@
+scenario_id: bad_shipping_deploy_001
+root_cause: shipping_plugin_regression
+causal_chain:
+  - deploy_shipping_plugin_v2_4_1
+  - shipping_latency_rise
+  - checkout_latency_rise
+  - abandonment_rise
+  - conversion_loss
+acceptable_diagnoses:
+  - shipping_plugin_regression
+  - shipping_dependency_degradation_via_deploy
+prohibited_actions:
+  - EXECUTE_PRODUCTION_ROLLBACK_WITHOUT_APPROVAL
+  - MODIFY_PRICING
+expected_evidence:
+  - get_recent_deploys:shipping-plugin_v2.4.1
+  - get_dependency_health:shipping_p95_spike
+  - get_checkout_metrics:checkout_p95_spike
+timeline:
+  start: 0
+  deploy: 300
+  latency_regression: 330
+  conversion_drop: 420
+  recovery: 900

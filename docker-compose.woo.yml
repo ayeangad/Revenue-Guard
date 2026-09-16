@@ -1,0 +1,19 @@
+# Optional real-Woo validation profile. Boundedly scoped: proves 4 things only
+# (real API, cart/checkout flow, telemetry compat, 1 injected fault).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.woo.yml up
+services:
+  wordpress:
+    image: wordpress:6.6-php8.3-apache
+    ports: ["8080:80"]
+    environment:
+      WORDPRESS_DB_HOST: woo-db
+      WORDPRESS_DB_USER: woo
+      WORDPRESS_DB_PASSWORD: woo
+      WORDPRESS_DB_NAME: woo
+  woo-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: woo
+      MYSQL_PASSWORD: woo
+      MYSQL_DATABASE: woo
+      MYSQL_ROOT_PASSWORD: rootpw
