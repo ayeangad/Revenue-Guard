@@ -46,7 +46,12 @@ if __name__ == "__main__":
 
     import yaml
     report = json.loads(Path("evals/reports/latest.json").read_text())
-    res = {r["scenario"]: r for r in report["results"]}
+    # runner writes {"tiers": {...}}; legacy flat {"results": [...]} still accepted
+    if "tiers" in report:
+        t1 = report["tiers"].get("tier1_canonical", {})
+        res = {r["scenario"]: r for r in t1.get("results", [])}
+    else:
+        res = {r["scenario"]: r for r in report["results"]}
     rows = []
     for p in sorted(glob.glob("evals/cases/*.yaml")):
         spec = yaml.safe_load(Path(p).read_text())

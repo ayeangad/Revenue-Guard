@@ -87,15 +87,16 @@ without APPROVED approval; multi-step rollouts journal + resume.
 
 ## Evaluation
 
-15-case benchmark (`evals/cases/`): bad deploy, payment/ship/DB/cache, traffic,
-mobile-only, pricing, false alarm, telemetry gap, multi-fault, misleading
-correlation, delayed, transient, bad-rollback. Runner measures detection,
-root-cause, FP/FN, evidence count, unsafe actions, time. 3 judges
-(free-form/rubric/evidence) + human labels with Cohen's kappa — including 2
-deliberate human-vs-judge disagreements proving the grader can be wrong.
-Current: accuracy 15/15 (mock; harness measures, mock is matched by
-construction), unsafe 0/15, human-vs-rubric kappa 0.0 (expected — see
-`docs/evaluation.md`).
+Three tiers (`evals/`): Tier1 canonical (15 hand-written) · Tier2 generated
+(450 perturbed runs: fault x traffic x AOV x timing) · Tier3 adversarial (4:
+stale/conflict/multi/injection) + 5 private held-out (never tuned to). Every
+rate reports N + Wilson 95% CI. 3 judges (free-form/rubric/evidence) + human
+labels with Cohen's kappa + grader mutation tests.
+Current: harness correctness 15/15 canonical [0.80,1.00]; Tier2 0.933
+[0.906,0.953] with attribution|detected 330/330 and 30 sub-threshold misses;
+Tier3 4/4; private 5/5; unsafe 0/474. Agent/model performance on a live LLM is
+PENDING — mock numbers measure the harness, not model quality. See
+`docs/validation-report.md` (generated) and `docs/evaluation.md`.
 
 ## Failure Analysis
 
@@ -117,9 +118,12 @@ calibration. See `docs/decisions.md`.
 
 ## Results
 
-`uv run pytest` 11 passed · `ruff` clean · eval accuracy 1.00 (n=15, mock) ·
-unsafe 0 · judges kappa 1.00 inter-judge / 0.00 human-vs-rubric (2 deliberate
-disagreements) · golden E2E verify PASS. Details: `docs/evaluation.md`.
+`uv run pytest` 122 passed · `ruff` clean · harness correctness 15/15 [0.80,1.0] ·
+Tier2 0.933 [0.906,0.953] (attribution|detected 330/330) · Tier3 4/4 · private
+5/5 · unsafe 0/474 · inter-judge kappa 1.00 (correlated by construction, not a
+result) · human-vs-rubric kappa 0.00 on n=6 with 2 deliberate disagreements
+(statistically negligible by design) · golden E2E verify PASS. Full report with
+uncertainty: `docs/validation-report.md`.
 
 ## Running Locally
 
