@@ -10,9 +10,11 @@ from __future__ import annotations
 import re
 
 _PATTERNS = [
-    r"ignore (previous|all) instructions",
+    r"ignore .*instructions",  # covers "ignore all/previous instructions" variants
     r"system\s*:",
     r"execute .*rollback",
+    r"roll\s*back.*production",  # "roll back production now"
+    r"production.*roll\s*back",
     r"approve.*production",
     r"exfiltrate",
 ]

@@ -38,12 +38,17 @@ def _ev(tool: str, args: dict, claim: str, source_type: str, source_id: str,
 class ToolRegistry:
     """Deterministic tools. Methods return (payload, Evidence)."""
 
+    def __init__(self, actor: str = "operator"):
+        self.actor = actor
+
     def allowed(self, stage: str, tool: str) -> bool:
         if stage in ("DIAGNOSIS", "RECOMMENDATION", "DRY_RUN"):
             return True  # read-only synthesis stages may cite any collected evidence
         return tool in STAGE_TOOLS.get(stage, set())
 
     def _guard(self, stage: str, tool: str) -> None:
+        from agent.authz import authorize
+        authorize(self.actor, stage)  # role gate first: anonymous/analyst contained
         if not self.allowed(stage, tool):
             raise PermissionError(f"tool {tool} not available in stage {stage}")
 

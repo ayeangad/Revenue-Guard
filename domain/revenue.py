@@ -18,15 +18,31 @@ class RevenueImpact(BaseModel):
 
 
 def estimate_counterfactual(
-    sessions: int, baseline_conv: float, observed_conv: float, aov: float
+    sessions: int, baseline_conv: float, observed_conv: float, aov: float | None
 ) -> RevenueImpact:
-    """expected = sessions*baseline; lost = expected - observed; impact = lost*AOV."""
-    if sessions <= 0:
+    """expected = sessions*baseline; lost = expected - observed; impact = lost*AOV.
+
+    Validation (never silently coerce):
+    - sessions < 0, conversion outside [0, 1], or negative AOV -> ValueError
+    - sessions == 0 or AOV unknown (None) -> reliable=False, impact 0.0.
+      Missing is NOT treated as zero revenue; it is reported as unknowable.
+    """
+    for name, v in (("baseline_conv", baseline_conv), ("observed_conv", observed_conv)):
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"{name}={v}: conversion must be in [0, 1]")
+    if sessions < 0:
+        raise ValueError(f"sessions={sessions}: must be >= 0")
+    if aov is not None and aov < 0:
+        raise ValueError(f"aov={aov}: must be >= 0")
+    if sessions <= 0 or aov is None:
+        reason = ("no traffic in window: impact cannot be estimated reliably"
+                  if sessions <= 0 else
+                  "AOV unknown: impact cannot be estimated reliably (missing != 0)")
         return RevenueImpact(
             sessions=sessions, baseline_conv=baseline_conv, observed_conv=observed_conv,
-            aov=aov, expected_orders=0, observed_orders=0, lost_orders=0,
-            estimated_impact=0.0, reliable=False,
-            assumptions=["no traffic in window: impact cannot be estimated reliably"],
+            aov=aov if aov is not None else 0.0,
+            expected_orders=0, observed_orders=0, lost_orders=0,
+            estimated_impact=0.0, reliable=False, assumptions=[reason],
         )
     expected = sessions * baseline_conv
     observed = sessions * observed_conv
