@@ -32,6 +32,8 @@ system says INSUFFICIENT_EVIDENCE when telemetry can't support a claim.
 
 ## System Architecture
 
+![Revenue Guard architecture](docs/architecture.png)
+
 ```
 Commerce (sim default, Woo optional) -> deterministic telemetry ->
 deterministic detection -> stage-gated ToolRegistry -> LLM hypothesis/evidence ->
@@ -49,7 +51,7 @@ Iterative, deterministic state machine:
 `DETECTED -> TRIAGED -> INITIAL_HYPOTHESES ⇄ COLLECT_EVIDENCE ⇄ UPDATE_HYPOTHESES
 -> DIAGNOSIS -> IMPACT -> RECOMMENDATION -> DRY_RUN -> STAGING -> VALIDATION ->
 APPROVAL -> DEPLOYED -> VERIFICATION -> RESOLVED` (+ INSUFFICIENT_EVIDENCE etc.).
-10 typed tools, stage-gated in code. LLM (GPT-4o-mini, mockable offline) only
+10 typed tools, stage-gated in code. LLM (gpt-5-mini live, mockable offline) only
 ranks hypotheses / interprets evidence / narrates. No raw CoT in UI — evidence
 objects with `observed_at/collected_at/freshness` + diagnosis with
 HIGH/MEDIUM/LOW + breakdown.

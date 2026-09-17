@@ -10,7 +10,7 @@ Seed: `SimulationClock` T+ offsets per case; `uv.lock` + `OPENAI_MODEL` recorded
   quality. It is reported separately from any model-performance claim.
 - All accuracy numbers below are MOCK-provider numbers: the heuristic ranker is
   matched to the sim by construction. Agent/model performance on a live LLM
-  (`gpt-4o-mini`) is PENDING — the harness exists to measure exactly that.
+  (`gpt-5-mini`) is PENDING — the harness exists to measure exactly that.
 - Inter-judge kappa 1.00 reflects judges correlated by construction on an
   all-pass suite, not judge quality. Human-vs-rubric kappa 0.00 on n=6 is
   statistically negligible by design (2 deliberate disagreements).

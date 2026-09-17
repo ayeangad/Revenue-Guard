@@ -65,7 +65,7 @@ class MockProvider:
 
 class OpenAIProvider:
     def __init__(self, model: str | None = None):
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
     def rank_hypotheses(self, **ctx) -> list[dict]:
         # Lazy import so CI without key still works; falls back to mock logic.

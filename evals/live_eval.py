@@ -1,4 +1,4 @@
-"""Live-model evaluation harness: GPT-4o-mini as investigator + judge.
+"""Live-model evaluation harness: GPT-5-mini as investigator + judge.
 
 Design (frozen before first run — no optimizing to the test set):
   Condition A: mock investigator + heuristic judges (harness correctness)
@@ -6,8 +6,10 @@ Design (frozen before first run — no optimizing to the test set):
   Condition C: live investigator + live LLM judges, freeform vs rubric
                (evaluator agreement experiment)
 
-Key-gated: without OPENAI_API_KEY every entrypoint exits status 3 with
-status=INVALID (missing key is LOUD, never a silent pass, never a gate).
+Key-gated: without a WORKING OPENAI_API_KEY every entrypoint exits status 3
+with status=INVALID (missing/invalid key is LOUD, never a silent pass, never
+a gate). A preflight call validates the key before any spend; an
+all-fallback run is marked INVALID_AUTH, never COMPLETE.
 
 Provenance per call (recorded, never reconstructed):
   model, prompt_v, rubric_v, temperature, latency_s, input/output tokens,
@@ -24,10 +26,13 @@ import sys
 import time
 from pathlib import Path
 
+DEFAULT_MODEL = "gpt-5-mini"
+
 PRICES_USD_PER_1K = {
-    # gpt-4o-mini public pricing at time of writing; override via env if stale.
-    "gpt-4o-mini": {"in": float(os.getenv("RG_PRICE_IN", "0.00015")),
-                    "out": float(os.getenv("RG_PRICE_OUT", "0.0006"))},
+    # Public pricing at time of writing; override via env if stale.
+    "gpt-5-mini": {"in": float(os.getenv("RG_PRICE_IN", "0.00025")),
+                   "out": float(os.getenv("RG_PRICE_OUT", "0.002"))},
+    "gpt-4o-mini": {"in": 0.00015, "out": 0.0006},
 }
 
 PROMPT_V = "invest_rank_v1"
@@ -58,8 +63,24 @@ def require_key() -> str:
 
 
 def estimate_cost(model: str, inp: int, out: int) -> float:
-    p = PRICES_USD_PER_1K.get(model, PRICES_USD_PER_1K["gpt-4o-mini"])
+    p = PRICES_USD_PER_1K.get(model, PRICES_USD_PER_1K[DEFAULT_MODEL])
     return round(inp / 1000 * p["in"] + out / 1000 * p["out"], 6)
+
+
+def preflight_key() -> None:
+    """One cheap call proving the key works BEFORE any benchmark spend.
+
+    Raises MissingKeyError on absent key, RuntimeError on rejected key.
+    Catches the exact failure seen in the field: a well-formed but invalid
+    key that would otherwise turn every call into a silent mock fallback.
+    """
+    require_key()
+    from openai import OpenAI
+    try:
+        OpenAI().models.list()
+    except Exception as e:  # noqa: BLE001 - preflight must translate, not crash
+        raise RuntimeError(f"key preflight failed ({type(e).__name__}): "
+                           "check the key at platform.openai.com/account/api-keys")
 
 
 def chat(model: str, messages: list[dict], temperature: float,
@@ -68,15 +89,22 @@ def chat(model: str, messages: list[dict], temperature: float,
     from openai import OpenAI
     client = OpenAI()
     t0 = time.perf_counter()
-    resp = client.chat.completions.create(model=model, messages=messages,
-                                          temperature=temperature,
-                                          max_tokens=max_tokens)
+    kwargs: dict = {"model": model, "messages": messages,
+                    "max_completion_tokens": max_tokens}
+    if not model.startswith("gpt-5"):
+        # gpt-5 family only supports temperature=1 (the default): passing any
+        # other value is a 400 error, so omit it there.
+        kwargs["temperature"] = temperature
+        eff_temp = temperature
+    else:
+        eff_temp = 1.0
+    resp = client.chat.completions.create(**kwargs)
     dt = time.perf_counter() - t0
     choice = resp.choices[0].message.content or ""
     usage = resp.usage
     inp, out = (usage.prompt_tokens if usage else 0), \
         (usage.completion_tokens if usage else 0)
-    return choice, {"model": model, "temperature": temperature,
+    return choice, {"model": model, "temperature": eff_temp,
                     "latency_s": round(dt, 3), "input_tokens": inp,
                     "output_tokens": out,
                     "cost_usd": estimate_cost(model, inp, out)}
@@ -137,16 +165,17 @@ def live_judge(spec: dict, result: dict, model: str, rubric: str,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--condition", choices=["B", "C"], required=True)
-    ap.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--model", default=os.getenv("OPENAI_MODEL", DEFAULT_MODEL))
+    ap.add_argument("--temperature", type=float, default=1.0,
+                    help="ignored for gpt-5 family (API only supports 1.0)")
     ap.add_argument("--max-cost-usd", type=float, default=2.0)
     ap.add_argument("--limit", type=int, default=0,
                     help="0 = full Tier1 set; N = first N cases (smoke)")
     ap.add_argument("--out", default="evals/reports/live.json")
     args = ap.parse_args(argv)
     try:
-        require_key()
-    except MissingKeyError as e:
+        preflight_key()
+    except (MissingKeyError, RuntimeError) as e:
         print(json.dumps({"status": "INVALID", "reason": str(e)}))
         return 3
     import glob
@@ -191,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
                  "prompt_v": PROMPT_V, "n": len(results),
                  "spend_usd": round(spent, 6), "results": results,
                  "investigator_provenance": provenances}
+    # All-fallback tripwire: if EVERY ranking fell back (e.g. key died
+    # mid-run), this is mock data wearing a live label -> INVALID_AUTH.
+    live_calls = [p for p in provenances if not p.get("fallback")]
+    if args.condition in ("B", "C") and results and not live_calls:
+        out["status"] = "INVALID_AUTH"
+        out["reason"] = ("all investigator calls fell back; refusing to "
+                         "publish mock results as live")
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(out, indent=2))
+        print(json.dumps({"status": "INVALID_AUTH", "reason": out["reason"]}))
+        return 3
     if args.condition == "C":
         verdicts = []
         for p, r in zip(paths, results):

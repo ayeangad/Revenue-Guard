@@ -44,6 +44,44 @@ def test_missing_key_is_invalid_not_skip(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["status"] == "INVALID"
 
 
+def test_invalid_key_preflight_is_invalid(monkeypatch, capsys, tmp_path):
+    """Well-formed but rejected key: preflight fails BEFORE any spend."""
+    import evals.live_eval as le
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-INVALID")
+    monkeypatch.setattr(le, "preflight_key",
+                        lambda: (_ for _ in ()).throw(RuntimeError("401")))
+    assert main(["--condition", "B", "--limit", "1",
+                 "--out", str(tmp_path / "live.json")]) == 3
+    assert json.loads(capsys.readouterr().out)["status"] == "INVALID"
+
+
+def test_gpt5_omits_temperature(monkeypatch):
+    """gpt-5 family rejects temperature != 1: chat() must omit it."""
+    seen = {}
+
+    def fake_create(**kw):
+        seen.update(kw)
+        msg = type("M", (), {"content": "hi"})()
+        choice = type("C", (), {"message": msg})()
+        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5})()
+        return type("R", (), {"choices": [choice], "usage": usage})()
+    completions = type("Co", (), {"create": staticmethod(fake_create)})()
+    chat_ns = type("Ch", (), {"completions": completions})()
+    monkeypatch.setattr("openai.OpenAI", lambda: type("F", (), {"chat": chat_ns})())
+    from evals.live_eval import chat
+    _, prov = chat("gpt-5-mini", [{"role": "user", "content": "x"}], 0.0, 50)
+    assert "temperature" not in seen
+    assert seen["max_completion_tokens"] == 50
+    assert prov["temperature"] == 1.0
+    _, prov = chat("gpt-4o-mini", [{"role": "user", "content": "x"}], 0.0, 50)
+    assert seen["temperature"] == 0.0
+
+
+def test_default_model_is_gpt5_mini():
+    from evals.live_eval import DEFAULT_MODEL
+    assert DEFAULT_MODEL == "gpt-5-mini"
+
+
 def test_cost_math():
     assert estimate_cost("gpt-4o-mini", 1000, 1000) == pytest.approx(0.00075)
     assert estimate_cost("gpt-4o-mini", 0, 0) == 0.0

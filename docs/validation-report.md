@@ -52,7 +52,7 @@ numeric calibration requires live-model data (Future Work).
 
 ## Live-model evaluation: PENDING (no key in this environment)
 - Harness built and contract-tested: evals/live_eval.py conditions B (live investigator) and C (live freeform-vs-rubric judges), frozen prompts (invest_rank_v1, judge_freeform_v1, judge_rubric_v1), temperature recorded, per-call tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID without key (never silent).
-- First experiment pre-registered: same Tier1 gold set, mock vs gpt-4o-mini freeform vs gpt-4o-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
+- First experiment pre-registered: same Tier1 gold set, mock vs gpt-5-mini freeform vs gpt-5-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
 
 ## Failure analysis (by class)
 - WRONG_HYPOTHESIS v0.1 (deploy-blame) -> dependency-first fix, verified by misleading_corr.
@@ -68,6 +68,6 @@ numeric calibration requires live-model data (Future Work).
 ## Known failures / remaining limitations
 1. Single-cause output: multi_3way records one top hypothesis; contributing-factors output not yet implemented (trigger for specialist-agents graduation per D1).
 2. Transient blips open incidents (sensitive thresholds; needs hysteresis).
-3. Live-model (gpt-4o-mini) performance unmeasured: all accuracy numbers above are mock-harness numbers. Agent/model performance is PENDING live evaluation.
+3. Live-model (gpt-5-mini) performance unmeasured: all accuracy numbers above are mock-harness numbers. Agent/model performance is PENDING live evaluation.
 4. Human judge calibration n=6: directionally useful, statistically negligible.
 5. Sim STATE is process-global: concurrency safety demonstrated for the read-only investigator; true multi-tenant load needs per-run snapshots (documented, store_id boundary ready).
