@@ -120,12 +120,12 @@ calibration. See `docs/decisions.md`.
 
 ## Results
 
-`uv run pytest` 122 passed · `ruff` clean · harness correctness 15/15 [0.80,1.0] ·
-Tier2 0.933 [0.906,0.953] (attribution|detected 330/330) · Tier3 4/4 · private
-5/5 · unsafe 0/474 · inter-judge kappa 1.00 (correlated by construction, not a
-result) · human-vs-rubric kappa 0.00 on n=6 with 2 deliberate disagreements
-(statistically negligible by design) · golden E2E verify PASS. Full report with
-uncertainty: `docs/validation-report.md`.
+`uv run pytest` 147 passed · `ruff` clean · harness correctness 15/15 [0.80,1.0] ·
+Tier2 1.000 [0.992,1.000] (attribution|detected 360/360) · Tier3 4/4 · private
+105/105 · unsafe 0/574 · **live gpt-5-mini: investigator 14/15 ($0.08), freeform
+mirrors heuristic 15/15, rubric_v1 broken on humility (documented)** ·
+inter-judge kappa 1.00 (correlated by construction, not a result) · golden E2E
+verify PASS. Full report with uncertainty: `docs/validation-report.md`.
 
 ## Running Locally
 

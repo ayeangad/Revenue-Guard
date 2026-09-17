@@ -86,6 +86,9 @@ def preflight_key() -> None:
 def chat(model: str, messages: list[dict], temperature: float,
          max_tokens: int) -> tuple[str, dict]:
     """One metered call. Returns (text, provenance). Raises on API failure."""
+    import random
+
+    import openai
     from openai import OpenAI
     client = OpenAI()
     t0 = time.perf_counter()
@@ -98,7 +101,19 @@ def chat(model: str, messages: list[dict], temperature: float,
         eff_temp = temperature
     else:
         eff_temp = 1.0
-    resp = client.chat.completions.create(**kwargs)
+    # Retry transient flakes (429/5xx/connection + occasional transient 404s
+    # seen in the field); auth errors fail fast on attempt 1 via preflight.
+    last: Exception | None = None
+    for attempt in range(4):
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            break
+        except (openai.RateLimitError, openai.InternalServerError,
+                openai.APIConnectionError, openai.NotFoundError) as e:
+            last = e
+            time.sleep(2 ** attempt + random.uniform(0, 1))
+    else:
+        raise last  # type: ignore[misc]
     dt = time.perf_counter() - t0
     choice = resp.choices[0].message.content or ""
     usage = resp.usage
@@ -117,10 +132,11 @@ def live_rank_hypotheses(ctx: dict, model: str, temperature: float = 0.0) -> tup
               f"{json.dumps(ctx, sort_keys=True)}. Reply with EXACTLY a JSON list "
               'of {"name": <one of: ' + ",".join(sorted(ALLOWED_HYPOTHESES)) +
               '>, "confidence": HIGH|MEDIUM|LOW}.')
+    prov: dict = {"model": model, "prompt_v": PROMPT_V, "role": "investigator"}
     try:
-        text, prov = chat(model, [{"role": "user", "content": prompt}],
-                          temperature, 300)
-        prov.update({"prompt_v": PROMPT_V, "role": "investigator"})
+        text, call_prov = chat(model, [{"role": "user", "content": prompt}],
+                               temperature, 2500)
+        prov.update(call_prov)
         start, end = text.find("["), text.rfind("]")
         out = json.loads(text[start:end + 1])
         clean = [h for h in out if isinstance(h, dict)
@@ -129,9 +145,10 @@ def live_rank_hypotheses(ctx: dict, model: str, temperature: float = 0.0) -> tup
         if clean:
             return clean, prov
     except Exception as e:  # noqa: BLE001 - any live failure -> deterministic fallback
-        prov = {"model": model, "prompt_v": PROMPT_V, "role": "investigator",
-                "fallback": f"{type(e).__name__}"}
-        return MockProvider().rank_hypotheses(**ctx), prov
+        prov["fallback"] = f"{type(e).__name__}"
+        prov.update({"prompt_v": PROMPT_V, "role": "investigator"})
+        from agent.providers.llm import MockProvider as _MP
+        return _MP().rank_hypotheses(**ctx), prov
     prov["fallback"] = "contract-validation"
     return MockProvider().rank_hypotheses(**ctx), prov
 
@@ -146,9 +163,16 @@ def live_judge(spec: dict, result: dict, model: str, rubric: str,
                "hypotheses_n": result.get("hypotheses_n")}
     template = JUDGE_RUBRIC if rubric == "rubric" else JUDGE_FREEFORM
     rv = RUBRIC_STRUCTURED_V if rubric == "rubric" else RUBRIC_FREEFORM_V
-    text, prov = chat(model, [{"role": "user",
-                               "content": template + "\nCASE:\n" + json.dumps(payload)}],
-                      temperature, 200)
+    try:
+        text, prov = chat(model, [{"role": "user",
+                                   "content": template + "\nCASE:\n" + json.dumps(payload)}],
+                          temperature, 1500)
+    except Exception as e:  # noqa: BLE001 - judge transport failure is data
+        return ({"pass": False, "criterion": "none",
+                 "quote": "judge transport failure"},
+                {"model": model, "prompt_v": PROMPT_V, "rubric_v": rv,
+                 "role": f"judge:{rubric}", "transport_error": type(e).__name__,
+                 "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
     prov.update({"prompt_v": PROMPT_V,
                  "rubric_v": rv, "role": f"judge:{rubric}"})
     try:

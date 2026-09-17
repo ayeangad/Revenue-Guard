@@ -17,7 +17,7 @@ Generated from live runs (mock provider unless noted).
 ## Reliability
 | check | result |
 |---|---|
-| pytest | 144 passed in 1.92s |
+| pytest | 147 passed in 1.76s |
 | Golden E2E reproducibility | 50/50 identical |
 | Rollout resume after crash (5 steps, fail at 3) | 5/5, 5 rows, no dupes |
 
@@ -50,9 +50,19 @@ numeric calibration requires live-model data (Future Work).
 - Metamorphic judge tests (order/verbosity/statelessness): heuristic judges invariant by construction (tests/test_judge_bias.py); live-judge protocol defined, awaiting key.
 - Bigger experiment (NOT yet run): n=300 (100 easy / 100 ambiguous / 100 adversarial), >=75 double-labeled, human↔human kappa + per-class P/R + drift tracking.
 
-## Live-model evaluation: PENDING (no key in this environment)
-- Harness built and contract-tested: evals/live_eval.py conditions B (live investigator) and C (live freeform-vs-rubric judges), frozen prompts (invest_rank_v1, judge_freeform_v1, judge_rubric_v1), temperature recorded, per-call tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID without key (never silent).
-- First experiment pre-registered: same Tier1 gold set, mock vs gpt-5-mini freeform vs gpt-5-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
+## Live-model evaluation: REAL DATA (gpt-5-mini, condition C, Tier1 n=15)
+status: COMPLETE — model gpt-5-mini, temp 1.0, spend $0.0844, prompts frozen, 0 fallbacks, 0 transport losses
+- Investigator accuracy (heuristic gold): 14/15 (FAIL:multi_fault_001)
+- Freeform judge vs heuristic: 15/15 (mirrors heuristic exactly — lenient, zero discrimination beyond it)
+- Rubric judge vs heuristic: 3/15 — rubric systematically fails on 'humility' even with complete evidence (criterion misread as unconditional LOW-confidence demand). Verdict: rubric_v1 unusable as shipped; corrective hypothesis is a conditional rewording (NOT applied — frozen protocol, next experiment).
+- Human gold vs heuristic: 11/15; vs freeform: 11/15; vs rubric: 5/15 (n=15, single rater — direction only)
+- Headline for interviews: live model beats mock on the golden path (via_deploy nuance) but reproduces the naive deploy-blame failure on multi_fault that the mock's dependency-first ordering avoids.
+- Harness: evals/live_eval.py, frozen prompts (invest_rank_v1,
+  judge_freeform_v1, judge_rubric_v1), temperature 1.0, per-call
+  tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID
+  without key, INVALID_AUTH tripwire against all-fallback runs.
+- Judge transport: retries on transient flakes; persistent failures recorded
+  as data, never silently dropped.
 
 ## Failure analysis (by class)
 - WRONG_HYPOTHESIS v0.1 (deploy-blame) -> dependency-first fix, verified by misleading_corr.
@@ -68,6 +78,6 @@ numeric calibration requires live-model data (Future Work).
 ## Known failures / remaining limitations
 1. Single-cause output: multi_3way records one top hypothesis; contributing-factors output not yet implemented (trigger for specialist-agents graduation per D1).
 2. Transient blips open incidents (sensitive thresholds; needs hysteresis).
-3. Live-model (gpt-5-mini) performance unmeasured: all accuracy numbers above are mock-harness numbers. Agent/model performance is PENDING live evaluation.
-4. Human judge calibration n=6: directionally useful, statistically negligible.
+3. Live-model measured on Tier1 only (n=15, gpt-5-mini, $0.08): 14/15 investigator, freeform mirrors heuristic 15/15, rubric_v1 broken (humility over-application). Tier2/3 live sweep + n=300 gold NOT yet run.
+4. Human judge calibration n=24 single-rater: directionally useful, statistically negligible.
 5. Sim STATE is process-global: concurrency safety demonstrated for the read-only investigator; true multi-tenant load needs per-run snapshots (documented, store_id boundary ready).

@@ -51,6 +51,34 @@ PARTIAL_REMEDIATION, ROLLBACK_FAILURE.
    `["results"]` -> KeyError. Fix: judges accept both; gates run the pair.
    Status: fixed-verified.
 
+## Live-model findings (gpt-5-mini, condition C, Tier1 n=15, $0.08, 2026-09)
+
+8. Live deploy-blame on multi-fault — WRONG_HYPOTHESIS (model, not harness).
+   Evidence: live investigator returned `deployment_regression HIGH` on
+   `multi_fault_001` (ship+pay+DB fault with deploy), where the mock's
+   dependency-first ordering returns `payment_gateway_degradation`.
+   The live model over-weighted deploy recency — the exact naive behavior v0.1
+   fixed in the mock. Status: open; tests whether prompt emphasis or
+   flag-ordering fixes it (next experiment, frozen protocol until then).
+
+9. Rubric_v1 humility over-application — GRADER_FAILURE (live judge).
+   Evidence: live rubric judge failed 13/15 on criterion `humility`,
+   demanding LOW confidence even with complete evidence (only 2 pass, both
+   with criterion `none`). Freeform judge mirrored heuristic 15/15 (vacuous
+   leniency: also passed nothing extra, discriminated nothing).
+   Corrective hypothesis: reword humility as conditional ("LOW required only
+   when telemetry gapped or evidence thin"). NOT applied — frozen protocol;
+   rubric_v1 recorded as unusable-as-shipped. Status: open.
+
+10. Reasoning-token truncation — TOOL_FAILURE (harness).
+    Evidence: first live run showed 29/55 investigator fallbacks
+    (JSONDecodeError) and 12/15 unparseable rubric verdicts; output-token
+    histograms clustered exactly at the 300/500 caps. Fix: budgets raised
+    (investigator 2500, judge 1500); rerun showed 0 fallbacks, 0 transport
+    losses. Status: fixed-verified. Lesson: token budget is a validity
+    parameter for reasoning models, not a cost tweak — cap it too low and the
+    harness silently measures the fallback mock.
+
 ## Corrected claims
 
 - WITHDRAWN: "30 sub-threshold misses = detector sensitivity floor." The misses

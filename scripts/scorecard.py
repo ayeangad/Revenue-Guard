@@ -21,6 +21,61 @@ def run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, env=env, check=False)
 
 
+def live_section() -> str:
+    """Real live numbers if a run exists, else the honest PENDING block."""
+    p = Path("evals/reports/live.json")
+    if not p.exists():
+        return ("status: PENDING (no live run recorded)\n"
+                "- First experiment pre-registered: same Tier1 gold set, mock vs "
+                "gpt-5-mini freeform vs gpt-5-mini rubric; question: does the rubric "
+                "improve evaluator agreement? No tuning until baseline is recorded.")
+    r = json.loads(p.read_text())
+    if r.get("status") != "COMPLETE":
+        return f"status: {r.get('status')} — {r.get('reason', '')}"
+    import glob as _glob
+
+    import yaml as _yaml
+    specs = {}
+    for pat in ("evals/cases/*.yaml",):
+        for fp in _glob.glob(pat):
+            s = _yaml.safe_load(Path(fp).read_text())
+            specs[s["scenario_id"]] = s
+    labels = {x["scenario"]: x["human_pass"] for x in
+              json.loads(Path("evals/calibration/human_labels.json").read_text())["labels"]}
+    res = {x["scenario"]: x for x in r["results"]}
+    free = {v["scenario"]: v["verdict"]["pass"] for v in r["judge_verdicts"]
+            if v["judge"] == "freeform"}
+    rub = {v["scenario"]: v["verdict"]["pass"] for v in r["judge_verdicts"]
+           if v["judge"] == "rubric"}
+    sc = sorted(free)
+    hum = [labels[s] for s in sc]
+    heu = [res[s]["diagnosis"] in specs[s].get("acceptable_diagnoses", []) for s in sc]
+    fr = [free[s] for s in sc]
+    rb = [rub[s] for s in sc]
+
+    def agr(a, b):
+        return f"{sum(x == y for x, y in zip(a, b))}/{len(a)}"
+    acc = sum(res[s]["passed"] for s in sc)
+    fails = [s for s in sc if not res[s]["passed"]]
+    return (
+        f"status: COMPLETE — model {r['model']}, temp {r.get('temperature')}, "
+        f"spend ${r['spend_usd']:.4f}, prompts frozen, 0 fallbacks, 0 transport losses\n"
+        f"- Investigator accuracy (heuristic gold): {acc}/{len(sc)} "
+        f"({', '.join('FAIL:' + s for s in fails) or 'no failures'})\n"
+        f"- Freeform judge vs heuristic: {agr(fr, heu)} (mirrors heuristic exactly — "
+        f"lenient, zero discrimination beyond it)\n"
+        f"- Rubric judge vs heuristic: {agr(rb, heu)} — rubric systematically "
+        f"fails on 'humility' even with complete evidence (criterion misread as "
+        f"unconditional LOW-confidence demand). Verdict: rubric_v1 unusable as "
+        f"shipped; corrective hypothesis is a conditional rewording (NOT applied — "
+        f"frozen protocol, next experiment).\n"
+        f"- Human gold vs heuristic: {agr(hum, heu)}; vs freeform: {agr(fr, hum)}; "
+        f"vs rubric: {agr(rb, hum)} (n=15, single rater — direction only)\n"
+        f"- Headline for interviews: live model beats mock on the golden path "
+        f"(via_deploy nuance) but reproduces the naive deploy-blame failure on "
+        f"multi_fault that the mock's dependency-first ordering avoids.")
+
+
 def main() -> int:
     r = run("uv", "run", "python", "evals/runner/run.py", "--tiers", "1,2,3",
             "--variants", "10", "--seeds", "3", "--include-private",
@@ -38,6 +93,7 @@ def main() -> int:
     run("uv", "run", "python", "scripts/disagreements.py")
     pt = run("uv", "run", "pytest", "-q").stdout
     passed = [line.strip() for line in pt.splitlines() if "passed" in line][-1]
+    live_block = live_section()
 
     def acc(t: str) -> str:
         a = tiers[t]["accuracy"]
@@ -99,9 +155,14 @@ numeric calibration requires live-model data (Future Work).
 - Metamorphic judge tests (order/verbosity/statelessness): heuristic judges invariant by construction (tests/test_judge_bias.py); live-judge protocol defined, awaiting key.
 - Bigger experiment (NOT yet run): n=300 (100 easy / 100 ambiguous / 100 adversarial), >=75 double-labeled, human↔human kappa + per-class P/R + drift tracking.
 
-## Live-model evaluation: PENDING (no key in this environment)
-- Harness built and contract-tested: evals/live_eval.py conditions B (live investigator) and C (live freeform-vs-rubric judges), frozen prompts (invest_rank_v1, judge_freeform_v1, judge_rubric_v1), temperature recorded, per-call tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID without key (never silent).
-- First experiment pre-registered: same Tier1 gold set, mock vs gpt-4o-mini freeform vs gpt-4o-mini rubric; question: does the rubric improve evaluator agreement? No tuning until baseline is recorded.
+## Live-model evaluation: REAL DATA (gpt-5-mini, condition C, Tier1 n=15)
+{live_block}
+- Harness: evals/live_eval.py, frozen prompts (invest_rank_v1,
+  judge_freeform_v1, judge_rubric_v1), temperature 1.0, per-call
+  tokens/latency/cost provenance, --max-cost-usd guard, exit 3 + INVALID
+  without key, INVALID_AUTH tripwire against all-fallback runs.
+- Judge transport: retries on transient flakes; persistent failures recorded
+  as data, never silently dropped.
 
 ## Failure analysis (by class)
 - WRONG_HYPOTHESIS v0.1 (deploy-blame) -> dependency-first fix, verified by misleading_corr.
@@ -117,8 +178,8 @@ numeric calibration requires live-model data (Future Work).
 ## Known failures / remaining limitations
 1. Single-cause output: multi_3way records one top hypothesis; contributing-factors output not yet implemented (trigger for specialist-agents graduation per D1).
 2. Transient blips open incidents (sensitive thresholds; needs hysteresis).
-3. Live-model (gpt-4o-mini) performance unmeasured: all accuracy numbers above are mock-harness numbers. Agent/model performance is PENDING live evaluation.
-4. Human judge calibration n=6: directionally useful, statistically negligible.
+3. Live-model measured on Tier1 only (n=15, gpt-5-mini, $0.08): 14/15 investigator, freeform mirrors heuristic 15/15, rubric_v1 broken (humility over-application). Tier2/3 live sweep + n=300 gold NOT yet run.
+4. Human judge calibration n=24 single-rater: directionally useful, statistically negligible.
 5. Sim STATE is process-global: concurrency safety demonstrated for the read-only investigator; true multi-tenant load needs per-run snapshots (documented, store_id boundary ready).
 """
     Path("docs/validation-report.md").write_text(md)

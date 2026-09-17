@@ -20,19 +20,35 @@ Seed: `SimulationClock` T+ offsets per case; `uv.lock` + `OPENAI_MODEL` recorded
 | tier | result |
 |---|---|
 | Tier1 canonical | 1.0000 95%CI[0.7961,1.0000] n=15 |
-| Tier2 generated | 0.9333 95%CI[0.9064,0.9529] n=450 |
+| Tier2 generated | 1.0000 95%CI[0.9915,1.0000] n=450 |
 | Tier3 adversarial | 1.0000 95%CI[0.5101,1.0000] n=4 |
-| Private held-out | 1.0000 95%CI[0.5655,1.0000] n=5 |
+| Private held-out (5 files + 100 quarantined) | 1.0000 95%CI[0.9647,1.0000] n=105 |
 
-- False positives: 0 (healthy -> INSUFFICIENT_EVIDENCE, Tier1+Tier2 IDK family 93/93).
-- Attribution|detected (Tier2): 330/330 — false-attribution rate 0.000 among
-  tripped cases. The 30 Tier2 misses are ALL sub-threshold (fault too small to
-  trip z>3/conv<-10%): a detector sensitivity floor, not misattribution.
+- False positives: 0 (healthy -> INSUFFICIENT_EVIDENCE, IDK family 93/93 Tier1+2).
+- Attribution|detected (Tier2): 360/360 — false-attribution rate 0.000 among
+  tripped cases. (A previous "30 sub-threshold misses" reading was retracted:
+  it was a benchmark bug — faults never injected under perturbed ids. See
+  failure-analysis #6. The corrected sensitivity probe shows the detector
+  trips even at +20ms DB fault: over-sensitivity on noisy baselines, not
+  misses, is the real boundary risk.)
 - Remediation: staging rollback + synthetic validation PASS on golden path;
   prod writes 0 without approval (300-case fuzz + policy tests).
-- Mean investigation time: ~0.001s (mock, in-process). Token usage: 0 mock;
-  metered via provider when key set.
-- Unsafe actions: 0/474.
+- Mean investigation time: ~0.001s (mock, in-process); ~11s/call live
+  (gpt-5-mini reasoning). Token usage: 0 mock; metered per call live.
+- Unsafe actions: 0/574.
+
+## Live model (gpt-5-mini, condition C, Tier1 n=15, $0.084, REAL DATA)
+
+- Investigator: 14/15 (only `multi_fault_001` wrong — live deploy-blame the
+  mock avoids; golden path shows finer nuance than mock: via_deploy variant).
+- Freeform judge: 15/15 agreement with heuristic — mirrors it exactly,
+  discriminates nothing beyond it (vacuous leniency documented, not celebrated).
+- Rubric judge: 3/15 — systematically fails on `humility`, demanding LOW
+  confidence even with complete evidence. rubric_v1 recorded as
+  unusable-as-shipped; rewording hypothesized but NOT applied (frozen protocol).
+- Human gold (n=15 Tier1 slice): vs heuristic 11/15, vs freeform 11/15,
+  vs rubric 5/15. Direction only (single rater).
+- Validity: 0 fallbacks, 0 transport losses, prompts frozen, spend capped.
 
 ## Agent quality
 
